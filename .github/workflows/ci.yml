@@ -26,8 +26,8 @@ jobs:
       - name: Install Home Assistant core deps
         run: |
           cd homeassistant-core
-          grep -v '^mypy-dev' requirements_test.txt > /tmp/req_test.txt
-          pip install -r requirements.txt -r /tmp/req_test.txt
+          grep -v '^mypy-dev' requirements_test.txt > requirements_test_filtered.txt
+          pip install -r requirements.txt -r requirements_test_filtered.txt
       - name: Hassfest integration validation
         run: >
           cd homeassistant-core &&
