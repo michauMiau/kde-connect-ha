@@ -1,0 +1,90 @@
+send_notification:
+  target:
+    entity:
+      integration: kde_connect
+      domain: notify
+  fields:
+    title:
+      selector:
+        text:
+      name: Title
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
+      name: Message
+send_sms:
+  target:
+    entity:
+      integration: kde_connect
+      domain: notify
+  fields:
+    phone_number:
+      selector:
+        text:
+      name: Phone number
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
+      name: Message
+find_my_phone:
+  target:
+    entity:
+      integration: kde_connect
+  fields:
+    ring:
+      default: true
+      selector:
+        boolean:
+      name: Ring
+    vibrate:
+      default: true
+      selector:
+        boolean:
+      name: Vibrate
+request_notifications:
+  target:
+    entity:
+      integration: kde_connect
+  fields: {}
+cancel_notification:
+  target:
+    entity:
+      integration: kde_connect
+      domain: notify
+  fields:
+    notification_id:
+      required: true
+      selector:
+        text:
+      name: Notification id
+notification_reply:
+  target:
+    entity:
+      integration: kde_connect
+      domain: notify
+  fields:
+    reply_id:
+      required: true
+      selector:
+        text:
+      name: Reply id
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
+      name: Reply text
+run_command:
+  target:
+    entity:
+      integration: kde_connect
+  fields:
+    command:
+      required: true
+      selector:
+        text:
+      name: Command id

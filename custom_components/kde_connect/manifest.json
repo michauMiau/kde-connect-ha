@@ -1,0 +1,12 @@
+{
+  "domain": "kde_connect",
+  "name": "KDE Connect",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/michauMiau/kde-connect-ha/blob/main/README.md",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/michauMiau/kde-connect-ha/issues",
+  "requirements": ["psutil:7.1.2"],
+  "version": "1.0.0"
+}

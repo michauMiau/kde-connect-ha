@@ -1,0 +1,166 @@
+{
+  "title": "KDE Connect",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to a KDE Connect device",
+        "description": "Enter the device's IP address or hostname. Home Assistant probes the device over UDP 1716 to discover its device id and TCP port.",
+        "data": {
+          "host": "Host or IP address",
+          "tcp_port": "TCP port (optional, default 1716)"
+        }
+      },
+      "pair": {
+        "title": "Pairing",
+        "description": "Open KDE Connect on the device and accept the pairing request for \"Home Assistant\". Then press Continue.",
+        "data": {
+          "retry_again": "Continue pairing"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This KDE Connect device is already configured.",
+      "cannot_connect": "Could not reach the device over UDP 1716 or complete the TLS handshake. Check that KDE Connect is running and discoverable on the network.",
+      "pairing_timeout": "The device did not confirm pairing within the timeout.",
+      "pairing_cancelled": "Pairing was cancelled."
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the device.",
+      "invalid_port": "Invalid TCP port: must be between 1716 and 1764.",
+      "pairing_timeout": "Pairing was not confirmed by the device yet. Approve it in KDE Connect and try again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "KDE Connect options",
+        "description": "Default SMS recipients (one per line, phone numbers).",
+        "data": {
+          "sms_targets": "Default SMS recipients"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_percent": {
+        "name": "Battery"
+      },
+      "ping_latency": {
+        "name": "Ping latency"
+      },
+      "notifications": {
+        "name": "Notifications received"
+      },
+      "sms_unread": {
+        "name": "Unread SMS"
+      }
+    },
+    "binary_sensor": {
+      "battery_charging": {
+        "name": "Charging"
+      }
+    },
+    "device_tracker": {
+      "presence": {
+        "name": "Presence"
+      }
+    },
+    "notify": {
+      "notification": {
+        "name": "Device notification"
+      },
+      "sms": {
+        "name": "SMS"
+      }
+    }
+  },
+  "issues": {
+    "pairing_pending": {
+      "title": "KDE Connect pairing is pending",
+      "description": "Open KDE Connect on {device_name} and accept the pairing request with Home Assistant."
+    }
+  },
+  "services": {
+    "send_notification": {
+      "name": "Send notification",
+      "description": "Displays a notification on the paired KDE Connect device.",
+      "fields": {
+        "title": {
+          "name": "Title",
+          "description": "Optional notification title."
+        },
+        "message": {
+          "name": "Message",
+          "description": "Notification content."
+        }
+      }
+    },
+    "send_sms": {
+      "name": "Send SMS",
+      "description": "Sends an SMS through the paired KDE Connect device.",
+      "fields": {
+        "phone_number": {
+          "name": "Phone number",
+          "description": "Recipient number. Uses configured default recipients when omitted."
+        },
+        "message": {
+          "name": "Message",
+          "description": "SMS message body."
+        }
+      }
+    },
+    "find_my_phone": {
+      "name": "Find my phone",
+      "description": "Triggers the device's find-my-phone plugin (ring and vibrate).",
+      "fields": {
+        "ring": {
+          "name": "Ring",
+          "description": "Play the configured ringtone on the device."
+        },
+        "vibrate": {
+          "name": "Vibrate",
+          "description": "Vibrate the device."
+        }
+      }
+    },
+    "request_notifications": {
+      "name": "Request notifications",
+      "description": "Asks the device to push its current notifications to Home Assistant."
+    },
+    "cancel_notification": {
+      "name": "Cancel notification",
+      "description": "Removes an active notification on the device.",
+      "fields": {
+        "notification_id": {
+          "name": "Notification id",
+          "description": "Id of the notification to cancel."
+        }
+      }
+    },
+    "notification_reply": {
+      "name": "Reply to notification",
+      "description": "Replies to a notification on the device that supports replies.",
+      "fields": {
+        "reply_id": {
+          "name": "Reply id",
+          "description": "replyId of the notification being replied to."
+        },
+        "message": {
+          "name": "Message",
+          "description": "Reply text."
+        }
+      }
+    },
+    "run_command": {
+      "name": "Run command",
+      "description": "Runs a command registered by the device's run-command plugin.",
+      "fields": {
+        "command": {
+          "name": "Command",
+          "description": "Command key from the device command list."
+        }
+      }
+    }
+  }
+}

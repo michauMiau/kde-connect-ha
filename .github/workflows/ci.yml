@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HA_CORE_PATH: ${{ github.workspace}/homeassistant-core
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: homeassistant/core
+          ref: '2026.2.3'
+          path: homeassistant-core
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install Home Assistant core deps
+        run: |
+          pip install -r homeassistant-core/requirements.txt
+          pip install -r homeassistant-core/requirements_test.txt
+      - name: Hassfest integration validation
+        run: >
+          cd homeassistant-core &&
+          python -m script.hassfest --core-path . --action validate
+          --integration-path "$GITHUB_WORKSPACE/custom_components/kde_connect"
+      - name: Ruff (core config)
+        run: >
+          cd homeassistant-core &&
+          python -m ruff check --config pyproject.toml
+          "$GITHUB_WORKSPACE/custom_components/kde_connect"
+          "$GITHUB_WORKSPACE/tests"
+      - name: Pylint (core config)
+        run: >
+          cd homeassistant-core &&
+          python -m pylint "$GITHUB_WORKSPACE/custom_components/kde_connect/*.py"
+          "$GITHUB_WORKSPACE/tests/test_kde_connect.py"
+      - name: Functional tests against HA core
+        run: python -m pytest -q --timeout=60
