@@ -1,17 +1,45 @@
-# KDE Connect integration for Home Assistant
+<div align=center>
+   <h2>
+KDE Connect integration for Home Assistant.
+   </h2>
+</div>
 
-Custom integration implementing the KDE Connect wire protocol from scratch: UDP discovery, TCP sessions with the KDE TLS model (plaintext packet, then TLS, roles inverted vs TCP direction), pairing trust-on-first-use, battery sensors, ping, notifications, SMS and runcommand services, payload transfer, events and repair flow.
+Also check out [KOSPEL PPE4 for Home Assistant](https://github.com/michauMiau/ppe4-ha), the sibling integration in this family.
 
-## Install (manual)
+## Features
 
-Copy `custom_components/kde_connect/` into your HA config's `custom_components/` directory, restart HA, then add the integration from Settings → Devices & Services (discovery works when a KDE Connect device broadcasts on the LAN). Pair the device from KDE Connect on the peer and accept the pairing prompt in HA.
+- Full KDE Connect protocol v8: UDP discovery, TCP sessions, plaintext packet + TLS (KDE's inverted TLS roles), encrypted identity, pairing trust-on-first-use
+- **Sensors**: battery charge, charging state, battery quantity; device availability
+- **Services**: ping, send notification, cancel notification, request notifications, notification reply, SMS, phone notification, find-my-phone, runcommand
+- **Events**: discovery, pair request, battery change, ping, notifications, SMS, command output
 
-## Entities and services
+## Installation
 
-- Battery sensor (charge, charging, quantity), device availability
-- `kde_connect.ping`, `kde_connect.send_notification`, `kde_connect.send_sms`, `kde_connect.phone_send_notification`, `kde_connect.runcommand` (per-device commands)
-- Events: discovery, pair request, battery change, ping, notifications, SMS, command output
+### Marketplace (recommended)
+
+[![Open your Home Assistant instance and add the repository](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=michauMiau&repository=kde-connect-ha&category=integration)
+
+1. Click the badge above (or **Marketplace → ⋮ → Custom repositories**)
+2. Repository: `michauMiau/kde-connect-ha`, category: **Integration**
+3. Click **Download** on *KDE Connect*.
+4. Restart Home Assistant.
+
+### Manual
+
+1. Copy `custom_components/kde_connect/` into your HA `config/custom_components/` directory.
+2. Restart Home Assistant.
+
+### Add the device
+
+[![Open your Home Assistant instance and start setting up.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=kde_connect)
+
+Or: *Settings → Devices & Services → Add Integration → **KDE Connect***.
+Devices broadcasting on the LAN are announced as discovery flows; a KDE Connect peer
+sent to the integration appears as an unknown-device flow. Pair the device from KDE
+Connect on the peer and accept the pairing prompt in Home Assistant.
 
 ## Development
 
-Tests run against a Home Assistant core checkout: set `HA_CORE_PATH` to the core repo dir, then `pytest` in this repo root. Lint gates use the core repo's ruff/pylint config and `script.hassfest` (see CI).
+Tests run against a Home Assistant core checkout: set `HA_CORE_PATH` to the core repo
+dir, then `pytest` in this repo root. CI runs hassfest, HACS validation, functional
+pytest and ruff/pylint gates.
