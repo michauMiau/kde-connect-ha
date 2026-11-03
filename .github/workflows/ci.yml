@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check out Home Assistant core for the harness
-        run: git clone --depth 1 --branch 2026.2.3 https://github.com/homeassistant/core.git homeassistant-core
+        run: git clone --depth 1 --branch 2026.2.3 https://github.com/home-assistant/core.git homeassistant-core
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
