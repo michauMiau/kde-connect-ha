@@ -1,3 +1,5 @@
+# noqa: INP001 - no __init__.py: a package named `tests` would collide with
+# Home Assistant core's `tests` package, breaking pytest module imports.
 """Functional tests for the KDE Connect integration against an in-process fake device.
 
 Each test drives a real TCP/TLS protocol-v8 handshake (certificates with
@@ -57,7 +59,7 @@ from homeassistant.const import STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
-from tests.common import MockConfigEntry  # noqa: TID251 - harness helpers for entry mocks
+from tests.common import MockConfigEntry  # noqa: TID251 - harness entry-mock helpers
 
 # The HA harness blocks sockets per test (pytest-socket); this module drives
 # real loopback TCP sessions. enable_socket() restores socket creation but the

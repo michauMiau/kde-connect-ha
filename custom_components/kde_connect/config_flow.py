@@ -92,7 +92,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         """Close a throwaway peer, best effort."""
         try:
             await peer.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - throwaway peer may already be gone
             _LOGGER.debug("peer shutdown failed", exc_info=True)
 
     async def _async_handshake(

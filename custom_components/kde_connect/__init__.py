@@ -242,7 +242,7 @@ class KdeConnectManager:
             server.close()
             try:
                 await server.wait_closed()
-            except Exception:
+            except Exception:  # noqa: BLE001 - defensive cleanup shutdown
                 _LOGGER.debug("inbound server shutdown failed", exc_info=True)
 
     async def setup_entry(self, entry: ConfigEntry) -> None:
@@ -312,7 +312,7 @@ class KdeConnectManager:
     async def _shutdown_peer(peer: KdePeer) -> None:
         try:
             await peer.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - peer close may fail mid-shutdown
             _LOGGER.debug("KDE Connect peer shutdown failed", exc_info=True)
 
     async def _ensure_local_identity(self) -> None:
@@ -398,7 +398,7 @@ class KdeConnectManager:
         except protocol.ProtocolError as err:
             _LOGGER.debug("inbound session with %s refused: %s", peer.device_id, err)
             await self._close_writer(writer)
-        except Exception:
+        except Exception:  # noqa: BLE001 - session failure must not kill listener
             _LOGGER.warning("Inbound session with %s failed", peer.device_id, exc_info=True)
             await self._close_writer(writer)
 
@@ -407,7 +407,7 @@ class KdeConnectManager:
         try:
             writer.close()
             await writer.wait_closed()
-        except Exception:
+        except Exception:  # noqa: BLE001 - writer may already be closed
             _LOGGER.debug("inbound writer shutdown failed", exc_info=True)
 
     def _announce_unknown_device(
@@ -437,7 +437,7 @@ class KdeConnectManager:
                     f"kde_connect_discovery_{device_id}",
                     eager_start=True,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - discovery flow may race with entry setup
                 _LOGGER.debug("KDE Connect discovery flow init failed", exc_info=True)
 
     # -------------------------------------------------------------- reconnect
@@ -533,7 +533,7 @@ class KdeConnectManager:
                 self.hass.config_entries.async_update_entry(
                     entry, data={**entry.data, **updates}
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - persisting is best-effort
                 _LOGGER.debug("could not persist KDE Connect entry updates", exc_info=True)
 
     def peer_for_device(self, dev_id: str) -> KdePeer | None:
