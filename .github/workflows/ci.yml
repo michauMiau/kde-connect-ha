@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  HA_CORE_PATH: ${{ github.workspace}/homeassistant-core
+  HA_CORE_PATH: ${{ github.workspace }}/homeassistant-core
 
 jobs:
   checks:
