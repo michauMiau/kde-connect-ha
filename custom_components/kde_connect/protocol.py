@@ -915,6 +915,17 @@ def apply_tcp_keepalive(
             sock.setsockopt(socket.IPPROTO_TCP, user_timeout, user_timeout_ms)
 
 
+def local_ipv4() -> str:
+    """The IPv4 address the default route selects for outbound UDP."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            # A UDP connect does not send packets; it resolves the outbound route.
+            sock.connect(("192.0.2.1", 0))
+            return str(sock.getsockname()[0])
+    except OSError:
+        return ""
+
+
 def broadcast_addresses() -> list[str]:
     """IPv4 broadcast addresses used for UDP discovery.
 

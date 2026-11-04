@@ -23,6 +23,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     DISCOVERY_INTERVAL,
+    DISCOVERY_SWEEP_INTERVAL,
     DOMAIN,
     EVENT_DEVICE_DISCOVERED,
     PACKET_TYPE_IDENTITY,
@@ -32,6 +33,7 @@ from .const import (
 from .protocol import (
     decode_packet,
     encode_packet,
+    local_ipv4,
     make_udp_discovery_packet,
     valid_device_id,
 )
@@ -51,6 +53,7 @@ class KdeConnectDiscovery:
         self._manager = manager
         self._transport: asyncio.DatagramTransport | None = None
         self._broadcast_task: asyncio.Task[None] | None = None
+        self._sweep_task: asyncio.Task[None] | None = None
         self._last_seen: dict[str, float] = {}
         self._pending_probes: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._started = False
@@ -80,6 +83,9 @@ class KdeConnectDiscovery:
         self._broadcast_task = self._hass.async_create_background_task(
             self._async_broadcast_loop(), "kde_connect_announce", eager_start=True
         )
+        self._sweep_task = self._hass.async_create_background_task(
+            self._async_sweep_loop(), "kde_connect_sweep", eager_start=True
+        )
 
     async def async_stop(self) -> None:
         """Stop broadcasting and close the UDP socket."""
@@ -87,6 +93,9 @@ class KdeConnectDiscovery:
         if self._broadcast_task is not None:
             self._broadcast_task.cancel()
             self._broadcast_task = None
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
+            self._sweep_task = None
         if self._transport is not None:
             self._transport.close()
             self._transport = None
@@ -117,6 +126,29 @@ class KdeConnectDiscovery:
                 except OSError:
                     _LOGGER.debug("KDE Connect UDP broadcast failed", exc_info=True)
             await asyncio.sleep(DISCOVERY_INTERVAL)
+
+    async def _async_sweep_loop(self) -> None:
+        """Unicast-identity probe across the local /24, NAT-safe discovery.
+
+        Broadcast frames do not cross Docker's NAT bridge, so devices outside
+        the container network never receive the announce. Unicast probes to the
+        subnet addresses of the outbound route reach KDE devices directly.
+        """
+        while self._started and self._transport is not None:
+            packet = self._announce_packet()
+            if packet is not None:
+                local = local_ipv4()
+                if local.count(".") == 3:
+                    prefix = local.rsplit(".", 1)[0]
+                    for last in range(1, 255):
+                        target = f"{prefix}.{last}"
+                        if target == local:
+                            continue
+                        try:
+                            self._transport.sendto(packet, (target, UDP_PORT))
+                        except OSError:
+                            _LOGGER.debug("KDE Connect UDP sweep to %s failed", target)
+            await asyncio.sleep(DISCOVERY_SWEEP_INTERVAL)
 
     # ------------------------------------------------------------------ socket
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:  # type: ignore[override]
