@@ -7,6 +7,6 @@
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/michauMiau/kde-connect-ha/issues",
-  "requirements": ["psutil:7.1.2"],
+  "requirements": [],
   "version": "1.0.0"
 }

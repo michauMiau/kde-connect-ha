@@ -49,7 +49,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-import psutil
 
 from .const import (
     MAX_IDENTITY_PACKET_SIZE,
@@ -917,13 +916,10 @@ def apply_tcp_keepalive(
 
 
 def broadcast_addresses() -> list[str]:
-    """IPv4 broadcast addresses of local interfaces (UDP announce targets)."""
-    targets: list[str] = [
-        addr.broadcast
-        for addrs in psutil.net_if_addrs().values()
-        for addr in addrs
-        if addr.family == socket.AF_INET and addr.broadcast
-    ]
-    if "255.255.255.255" not in targets:
-        targets.append("255.255.255.255")
-    return targets
+    """IPv4 broadcast addresses used for UDP discovery.
+
+    The limited broadcast address is enough for the LAN announce: KDE Connect
+    devices listen on the same subnet as Home Assistant. Interface enumeration
+    needs no third-party dependency.
+    """
+    return ["255.255.255.255"]
