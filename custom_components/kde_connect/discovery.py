@@ -80,6 +80,7 @@ class KdeConnectDiscovery:
             return
 
         self._transport = transport
+        _LOGGER.info("KDE Connect UDP discovery listener bound on port %s", UDP_PORT)
         self._broadcast_task = self._hass.async_create_background_task(
             self._async_broadcast_loop(), "kde_connect_announce", eager_start=True
         )
@@ -140,6 +141,11 @@ class KdeConnectDiscovery:
                 local = local_ipv4()
                 if local.count(".") == 3:
                     prefix = local.rsplit(".", 1)[0]
+                    _LOGGER.debug(
+                        "KDE Connect UDP sweep on %s.1-254 from %s",
+                        prefix,
+                        local,
+                    )
                     for last in range(1, 255):
                         target = f"{prefix}.{last}"
                         if target == local:
@@ -172,6 +178,7 @@ class KdeConnectDiscovery:
             return
         if self._manager.local_device_id and device_id == self._manager.local_device_id:
             return
+        _LOGGER.debug("KDE Connect identity packet from %s: %s", addr[0], device_id)
         self._async_handle_identity(str(device_id), str(addr[0]), body)
 
     @callback

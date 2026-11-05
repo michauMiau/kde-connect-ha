@@ -315,6 +315,14 @@ class KdeConnectManager:
         except Exception:  # noqa: BLE001 - peer close may fail mid-shutdown
             _LOGGER.debug("KDE Connect peer shutdown failed", exc_info=True)
 
+    async def async_ensure_local_identity(self) -> None:
+        """Generate the local identity for announce broadcasts right at setup.
+
+        Without peers configured yet, discovery still needs a stable deviceId to
+        broadcast. The identity is generated once and persisted across reloads.
+        """
+        await self._ensure_local_identity()
+
     async def _ensure_local_identity(self) -> None:
         """Load or generate our stable local identity (device id + cert)."""
         if self.identity is not None:
@@ -651,6 +659,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     hass.data[DOMAIN] = {DATA_MANAGER: manager, DATA_DISCOVERY: discovery}
 
     await manager.start()
+    await manager.async_ensure_local_identity()
     await discovery.async_start()
 
     async def _on_ha_stop(event: Event) -> None:
