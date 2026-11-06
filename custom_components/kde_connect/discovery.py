@@ -178,7 +178,7 @@ class KdeConnectDiscovery:
             return
         if self._manager.local_device_id and device_id == self._manager.local_device_id:
             return
-        _LOGGER.debug("KDE Connect identity packet from %s: %s", addr[0], device_id)
+        _LOGGER.info("KDE Connect identity packet from %s: %s", addr[0], device_id)
         self._async_handle_identity(str(device_id), str(addr[0]), body)
 
     @callback
@@ -228,7 +228,7 @@ class KdeConnectDiscovery:
                 data=data,
             )
         except Exception:  # noqa: BLE001 - discovery flow may race with entry setup
-            _LOGGER.debug("KDE Connect discovery flow init failed", exc_info=True)
+            _LOGGER.info("KDE Connect discovery flow init failed", exc_info=True)
 
     async def async_probe(self, host: str, timeout: float) -> dict[str, Any] | None:
         """Send an identity packet to ``host`` and wait for its identity reply."""

@@ -110,7 +110,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
             return False
         identity = getattr(manager, "identity", None)
         if identity is None:
-            _LOGGER.debug("KDE Connect local identity is not ready")
+            _LOGGER.info("KDE Connect local identity is not ready")
             return False
 
         if device_id is None:
@@ -119,7 +119,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
                 return False
             probe = await discovery.async_probe(host, timeout=HANDSHAKE_TIMEOUT)
             if probe is None or not probe.get("device_id"):
-                _LOGGER.debug("KDE Connect UDP probe to %s got no identity", host)
+                _LOGGER.info("KDE Connect UDP probe to %s got no identity", host)
                 return False
             device_id = str(probe["device_id"])
             if not valid_device_id(device_id):
@@ -150,7 +150,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             await peer.connect(host, port)
         except ProtocolError as err:
-            _LOGGER.debug("KDE Connect handshake to %s:%s failed: %s", host, port, err)
+            _LOGGER.info("KDE Connect handshake to %s:%s failed: %s", host, port, err)
             await self._close_peer(peer)
             self._peer = None
             return False
