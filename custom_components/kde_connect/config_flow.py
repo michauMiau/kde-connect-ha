@@ -110,7 +110,10 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if manager is None:
             # Config flow may start before async_setup or with a first entry.
             # Load the component so manager/discovery exist for the probe.
-            await async_setup_component(self.hass, DOMAIN, {DOMAIN: {}})
+            try:
+                await async_setup_component(self.hass, DOMAIN, {DOMAIN: {}})
+            except Exception:  # noqa: BLE001 - fallback logs manager missing
+                pass
             manager = self._manager()
         if manager is None:
             _LOGGER.info("KDE Connect manager is not loaded")
@@ -160,7 +163,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         try:
             await peer.connect(host, port)
-        except ProtocolError as err:
+        except (ProtocolError, OSError, TimeoutError) as err:
             _LOGGER.info("KDE Connect handshake to %s:%s failed: %s", host, port, err)
             await self._close_peer(peer)
             self._peer = None

@@ -235,6 +235,8 @@ class KdePeer:
             )
         except TimeoutError as err:
             raise HandshakeError(f"TCP connect to {host}:{port} timed out") from err
+        except OSError as err:
+            raise HandshakeError(f"TCP connect to {host}:{port} failed: {err}") from err
 
         self._reader = reader
         self._writer = writer
@@ -259,7 +261,12 @@ class KdePeer:
         # The peer answers our connection packet in plaintext before TLS starts
         # (Qt reads the packet first, then upgrades); consume it so buffered
         # bytes only carry the TLS handshake.
-        reply = await read_packet(reader, timeout=HANDSHAKE_TIMEOUT)
+        try:
+            reply = await read_packet(reader, timeout=HANDSHAKE_TIMEOUT)
+        except TimeoutError as err:
+            raise HandshakeError(f"peer {host}:{port} did not answer the connection packet") from err
+        except OSError as err:
+            raise HandshakeError(f"peer {host}:{port} disconnected before identity packet") from err
         if reply is None or reply.get("type") != PACKET_TYPE_IDENTITY:
             raise HandshakeError(
                 f"peer {host}:{port} did not answer the connection packet"
@@ -297,6 +304,8 @@ class KdePeer:
             raise HandshakeError(
                 f"peer {host}:{port} did not send an encrypted identity packet"
             ) from err
+        except OSError as err:
+            raise HandshakeError(f"peer {host}:{port} disconnected before encrypted identity") from err
         self._consume_peer_identity(peer_identity)
 
         self._connected = True
