@@ -69,7 +69,7 @@ from .const import (
     SMS_REQUEST_PACKET_VERSION,
 )
 
-DEVICE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{32,38}$")
+DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _DEVICE_NAME_STRIP_PATTERN = re.compile("""["',;:.!?()\\[\\]<>]""")
 MAX_DEVICE_NAME_LENGTH = 32
 

@@ -123,7 +123,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
                 return False
             device_id = str(probe["device_id"])
             if not valid_device_id(device_id):
-                _LOGGER.debug("Peer advertised invalid deviceId %r", device_id)
+                _LOGGER.info("Peer advertised invalid deviceId %r", device_id)
                 return False
             if probe.get("device_name"):
                 device_name = str(probe["device_name"])
