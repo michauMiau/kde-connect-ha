@@ -111,7 +111,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if manager is None:
             # Config flow may start before async_setup or with a first entry.
             # Load the component so manager/discovery exist for the probe.
-            with contextlib.suppress(Exception):  # noqa: BLE001 - fallback logs manager missing
+            with contextlib.suppress(Exception):
                 await async_setup_component(self.hass, DOMAIN, {DOMAIN: {}})
             manager = self._manager()
         if manager is None:
