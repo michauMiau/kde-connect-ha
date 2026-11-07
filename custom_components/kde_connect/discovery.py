@@ -187,6 +187,8 @@ class KdeConnectDiscovery:
     ) -> None:
         """A device identity arrived: answer pending probes or announce."""
         future = self._pending_probes.pop(host, None)
+        if future is None and self._pending_probes:
+            future = self._pending_probes.pop(next(iter(self._pending_probes)))
         if future is not None and not future.done():
             future.set_result(
                 {

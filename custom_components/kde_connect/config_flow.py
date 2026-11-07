@@ -112,7 +112,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
             # Config flow may start before async_setup or with a first entry.
             # Load the component so manager/discovery exist for the probe.
             with contextlib.suppress(Exception):
-                await async_setup_component(self.hass, DOMAIN, {DOMAIN: {}})
+                await async_setup_component(self.hass, DOMAIN, {})
             manager = self._manager()
         if manager is None:
             _LOGGER.info("KDE Connect manager is not loaded")
