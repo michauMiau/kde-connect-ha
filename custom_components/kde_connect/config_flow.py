@@ -16,6 +16,7 @@ Trust model (peer.py): peer certificate CN must equal deviceId; a pinned cert
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -110,10 +111,8 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if manager is None:
             # Config flow may start before async_setup or with a first entry.
             # Load the component so manager/discovery exist for the probe.
-            try:
+            with contextlib.suppress(Exception):  # noqa: BLE001 - fallback logs manager missing
                 await async_setup_component(self.hass, DOMAIN, {DOMAIN: {}})
-            except Exception:  # noqa: BLE001 - fallback logs manager missing
-                pass
             manager = self._manager()
         if manager is None:
             _LOGGER.info("KDE Connect manager is not loaded")
