@@ -29,6 +29,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
+from homeassistant.setup import async_setup_component
 
 from .const import (
     CONF_ANNOUNCE,
@@ -109,7 +110,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if manager is None:
             # Config flow may start before async_setup or with a first entry.
             # Load the component so manager/discovery exist for the probe.
-            await self.hass.config_entries.async_setup_component(DOMAIN)
+            await async_setup_component(self.hass, DOMAIN, {DOMAIN: {}})
             manager = self._manager()
         if manager is None:
             _LOGGER.info("KDE Connect manager is not loaded")
