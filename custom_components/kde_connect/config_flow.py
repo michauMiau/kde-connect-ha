@@ -107,8 +107,17 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         manager = self._manager()
         if manager is None:
+            # Config flow may start before async_setup or with a first entry.
+            # Load the component so manager/discovery exist for the probe.
+            await self.hass.config_entries.async_setup_component(DOMAIN)
+            manager = self._manager()
+        if manager is None:
+            _LOGGER.info("KDE Connect manager is not loaded")
             return False
         identity = getattr(manager, "identity", None)
+        if identity is None and hasattr(manager, "async_ensure_local_identity"):
+            await manager.async_ensure_local_identity()
+            identity = getattr(manager, "identity", None)
         if identity is None:
             _LOGGER.info("KDE Connect local identity is not ready")
             return False
@@ -116,6 +125,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if device_id is None:
             discovery = getattr(manager, "discovery", None)
             if discovery is None:
+                _LOGGER.info("KDE Connect discovery is not loaded")
                 return False
             probe = await discovery.async_probe(host, timeout=HANDSHAKE_TIMEOUT)
             if probe is None or not probe.get("device_id"):
