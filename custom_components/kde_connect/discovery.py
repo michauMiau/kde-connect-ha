@@ -229,7 +229,7 @@ class KdeConnectDiscovery:
                 context={"source": "discovery", "unique_id": data["device_id"]},
                 data=data,
             )
-        except Exception:  # noqa: BLE001 - discovery flow may race with entry setup
+        except Exception:
             _LOGGER.info("KDE Connect discovery flow init failed", exc_info=True)
 
     async def async_probe(self, host: str, timeout: float) -> dict[str, Any] | None:

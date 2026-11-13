@@ -9,20 +9,16 @@ Outbound (HA connects to the peer's announced ``tcpPort``):
 2. Send the *plaintext connection packet*
    ``{"type": "kdeconnect.identity", "body": {deviceId, deviceName,
    protocolVersion, targetDeviceId, targetProtocolVersion}}``.
-3. Upgrade the socket with ``writer.start_tls`` (connecting side initiates).
-4. Inside TLS send our encrypted identity packet
+3. Upgrade the socket to TLS (TCP client acts as TLS server).
+4. Inside TLS exchange encrypted identity packets
    ``{deviceId, deviceName, deviceType, protocolVersion,
-   incomingCapabilities, outgoingCapabilities}`` and read the peer's
-   encrypted identity answer (KDE Core replies within ~1 s).
-5. Verify the peer certificate: ``CN == deviceId``, and for trusted peers
-   the presented certificate must equal the pinned ``peer_cert_pem``.
+   incomingCapabilities, outgoingCapabilities}``.
 
 Inbound (started by ``asyncio.start_server`` in ``__init__.py``):
 
 1. Read the peer's plaintext connection packet (carries ``targetDeviceId``).
-2. Reply with our plaintext identity packet carrying ``tcpPort``.
-3. Upgrade TLS (server side).
-4. Exchange encrypted identity packets inside TLS.
+2. Upgrade TLS (TCP server acts as TLS client).
+3. Exchange encrypted identity packets inside TLS.
 
 Peer certificates are self-signed RSA/EC with ``CN == deviceId``. OpenSSL
 cannot build a trust chain from a bare self-signed leaf, so trust is
@@ -93,9 +89,11 @@ from .protocol import (
     ProtocolError,
     apply_tcp_keepalive,
     build_packet,
+    certificate_cn,
     client_tls_context,
     decode_packet,
     encode_packet,
+    load_certificate,
     make_connection_packet,
     make_encrypted_identity,
     make_find_my_phone_packet,
@@ -140,7 +138,7 @@ class KdePeer:
         hass: HomeAssistant,
         *,
         identity: LocalIdentity,
-        peer_device_id: str,
+        peer_device_id: str | None = None,
         peer_device_name: str | None = None,
         peer_device_type: str | None = None,
         peer_cert_pem: str | None = None,
@@ -156,7 +154,7 @@ class KdePeer:
         self._hass = hass
         self._identity = identity
         self._device_id = peer_device_id
-        self._device_name = peer_device_name or peer_device_id
+        self._device_name = peer_device_name or (peer_device_id or "")
         self._device_type = peer_device_type
         self._peer_cert_pem = peer_cert_pem
         self._capabilities = {str(name) for name in peer_capabilities or ()}
@@ -186,7 +184,7 @@ class KdePeer:
     @property
     def device_id(self) -> str:
         """Remote peer deviceId (HA device identifier / entity unique id)."""
-        return self._device_id
+        return self._device_id or ""
 
     @property
     def device_name(self) -> str:
@@ -249,7 +247,8 @@ class KdePeer:
             user_timeout_ms=TCP_USER_TIMEOUT_MS,
         )
 
-        # Plaintext connection packet; the peer initiates TLS right after it.
+        # KDE: TCP client sends plaintext connection packet, then immediately
+        # starts TLS (as TLS server). No plaintext reply in between.
         await self._send(
             make_connection_packet(
                 self._identity.device_id,
@@ -257,26 +256,6 @@ class KdePeer:
                 target_device_id=self._device_id,
             )
         )
-
-        # The peer answers our connection packet in plaintext before TLS starts
-        # (Qt reads the packet first, then upgrades); consume it so buffered
-        # bytes only carry the TLS handshake.
-        try:
-            reply = await read_packet(reader, timeout=HANDSHAKE_TIMEOUT)
-        except TimeoutError as err:
-            raise HandshakeError(f"peer {host}:{port} did not answer the connection packet") from err
-        except OSError as err:
-            raise HandshakeError(f"peer {host}:{port} disconnected before identity packet") from err
-        if reply is None or reply.get("type") != PACKET_TYPE_IDENTITY:
-            raise HandshakeError(
-                f"peer {host}:{port} did not answer the connection packet"
-            )
-        reply_body = reply.get("body") or {}
-        if reply_body.get("deviceId") != self._device_id:
-            raise PeerIdentityMismatch(
-                f"peer {host}:{port} answered with deviceId "
-                f"{reply_body.get('deviceId')!r}, expected {self._device_id!r}"
-            )
 
         try:
             await upgrade_tls(
@@ -353,15 +332,8 @@ class KdePeer:
                 f"peer {peer_id!r} speaks protocol version {version!r}, v8 required"
             )
 
-        # Plaintext reply carrying tcpPort; peer upgrades TLS after reading it.
-        await self._send(
-            make_connection_packet(
-                self._identity.device_id,
-                self._identity.device_name,
-                tcp_port=port,
-            )
-        )
-
+        # KDE: TCP server reads plaintext connection packet, then immediately
+        # starts TLS (as TLS client). No plaintext reply in between.
         try:
             await upgrade_tls(
                 reader,
@@ -386,6 +358,8 @@ class KdePeer:
             peer_identity = await read_packet(reader, timeout=ENCRYPTED_IDENTITY_TIMEOUT)
         except TimeoutError as err:
             raise HandshakeError("peer did not send an encrypted identity packet") from err
+        except OSError as err:
+            raise HandshakeError(f"peer disconnected before encrypted identity: {err}") from err
         self._consume_peer_identity(peer_identity)
 
         self._connected = True
@@ -431,12 +405,16 @@ class KdePeer:
             raise HandshakeError(f"expected identity packet, got {packet.get('type')!r}")
         body = packet.get("body") or {}
         peer_id = body.get("deviceId")
-        if peer_id != self._device_id:
+        if not isinstance(peer_id, str) or not valid_device_id(peer_id):
+            raise PeerIdentityMismatch(f"invalid peer deviceId: {peer_id!r}")
+        if self._device_id is None:
+            self._device_id = peer_id
+            if not self._device_name:
+                self._device_name = peer_id
+        elif peer_id != self._device_id:
             raise PeerIdentityMismatch(
                 f"peer identity deviceId {peer_id!r} != expected {self._device_id!r}"
             )
-        if not valid_device_id(peer_id):
-            raise PeerIdentityMismatch(f"invalid peer deviceId: {peer_id!r}")
         version = body.get("protocolVersion")
         if not isinstance(version, int) or version < PROTOCOL_VERSION:
             raise HandshakeError(
@@ -444,7 +422,7 @@ class KdePeer:
             )
 
         name = body.get("deviceName") or self._device_id
-        self._device_name = sanitize_device_name(name) or self._device_id
+        self._device_name = sanitize_device_name(name) or self._device_id or peer_id
         self._device_type = body.get("deviceType") or self._device_type
 
         outgoing = body.get("outgoingCapabilities") or []
@@ -456,12 +434,20 @@ class KdePeer:
             self._capabilities = set(self._incoming)
 
     def _verify_peer_certificate(self, writer: asyncio.StreamWriter) -> None:
-        """Verify the peer certificate against the pinned device id.
+        """Verify the peer certificate against the pinned/known device id.
 
         CN == deviceId; for trusted peers the TLS context already demands
         the pinned cert (CERT_REQUIRED against the pinned CA PEM).
         """
         captured = peer_certificate(writer, self._device_id)
+        if captured is not None and self._device_id is None:
+            # Learn device id from certificate CN when probing an unknown peer.
+            cert = load_certificate(captured)
+            cn = certificate_cn(cert)
+            if cn and valid_device_id(cn):
+                self._device_id = cn
+                if not self._device_name:
+                    self._device_name = cn
         if captured is not None and not self._peer_cert_pem:
             # Trust-on-first-use: remember what we saw so future sessions pin it.
             self._peer_cert_pem = captured

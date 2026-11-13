@@ -1,5 +1,4 @@
-# noqa: INP001 - no __init__.py: a package named `tests` would collide with
-# Home Assistant core's `tests` package, breaking pytest module imports.
+# noqa: INP001
 """Functional tests for the KDE Connect integration against an in-process fake device.
 
 Each test drives a real TCP/TLS protocol-v8 handshake (certificates with
@@ -59,7 +58,7 @@ from homeassistant.const import STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
-from tests.common import MockConfigEntry  # noqa: TID251 - harness entry-mock helpers
+from tests.common import MockConfigEntry  # noqa: TID251 - harness entry-mock helper
 
 # The HA harness blocks sockets per test (pytest-socket); this module drives
 # real loopback TCP sessions. enable_socket() restores socket creation but the
@@ -242,20 +241,8 @@ class FakeDevice:
                 writer.close()
                 return
 
-            # KDE answers the connection packet in plaintext before TLS starts.
-            reply_target = self.ha_device_id or None
-            await self._send_packet(
-                writer,
-                protocol.make_connection_packet(
-                    self.device_id,
-                    self.device_name,
-                    self.port,
-                    target_device_id=reply_target,
-                ),
-            )
-
-            # KDE inverts TLS roles: we are the TCP server, so we run the TLS
-            # client handshake (Qt: startClientEncryption on accepted sockets).
+            # KDE: TCP server reads plaintext connection packet, then immediately
+            # starts TLS (as TLS client). No plaintext reply in between.
             context = protocol.client_tls_context(
                 self.ha_cert_pem, self.identity.cert_pem, self.identity.key_pem
             )
@@ -370,13 +357,12 @@ class FakeDevice:
 
     async def run_inbound_session(
         self, port: int, *, target_device_id: str, server_cert_pem: str
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    ) -> tuple[None, dict[str, Any], dict[str, Any]]:
         """Run a device-initiated session against the fake device's peer.
 
-        Connect, plaintext connection packet, wait for the plaintext identity
-        reply, TLS upgrade, encrypted identity, pair request, battery push.
-        Returns the plaintext reply, the peer's encrypted identity and the pair
-        answer.
+        Connect, plaintext connection packet, TLS upgrade, encrypted identity,
+        pair request, battery push. KDE does not send a plaintext reply.
+        Returns (None, peer encrypted identity, pair answer).
         """
 
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -387,8 +373,6 @@ class FakeDevice:
                 self.device_id, self.device_name, target_device_id=target_device_id
             ),
         )
-        reply_line = await reader.readline()
-        reply_packet = protocol.decode_packet(reply_line) if reply_line else None
         # KDE inverts TLS roles: we opened this as a TCP client, so we run the
         # TLS server handshake (Qt: startServerEncryption on outgoing sockets).
         # ``server_cert_pem`` is HA's certificate, presented by HA as the TLS
@@ -407,7 +391,9 @@ class FakeDevice:
         await self._send_packet(
             writer, protocol.build_packet(PACKET_TYPE_BATTERY, BATTERY_BODY)
         )
-        return reply_packet, peer_identity, pair_answer
+        assert peer_identity is not None
+        assert pair_answer is not None
+        return None, peer_identity, pair_answer
 
 
 async def setup_integration(hass: HomeAssistant) -> Any:
@@ -754,7 +740,8 @@ async def test_inbound_serve_handshake_pair_and_battery(
         finally:
             pass
 
-        assert MIN_TCP_PORT <= reply["body"]["tcpPort"] <= MAX_TCP_PORT
+        # KDE does not send a plaintext reply on inbound TCP connections.
+        assert reply is None
         assert peer_identity["body"]["deviceId"] == local.device_id
         assert pair_answer["body"]["pair"] is True and "timestamp" not in pair_answer["body"]
         assert events, "device-initiated pair request announced"

@@ -94,7 +94,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         """Close a throwaway peer, best effort."""
         try:
             await peer.close()
-        except Exception:  # noqa: BLE001 - throwaway peer may already be gone
+        except Exception:
             _LOGGER.debug("peer shutdown failed", exc_info=True)
 
     async def _async_handshake(
@@ -127,27 +127,28 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if device_id is None:
             discovery = getattr(manager, "discovery", None)
-            if discovery is None:
-                _LOGGER.info("KDE Connect discovery is not loaded")
-                return False
-            probe = await discovery.async_probe(host, timeout=HANDSHAKE_TIMEOUT)
-            if probe is None or not probe.get("device_id"):
-                _LOGGER.info("KDE Connect UDP probe to %s got no identity", host)
-                return False
-            device_id = str(probe["device_id"])
-            if not valid_device_id(device_id):
-                _LOGGER.info("Peer advertised invalid deviceId %r", device_id)
-                return False
-            if probe.get("device_name"):
-                device_name = str(probe["device_name"])
-            try:
-                probe_port = int(probe.get("tcp_port") or UDP_PORT)
-            except (TypeError, ValueError):
-                probe_port = UDP_PORT
-            # The probe announces the device's live TCP port; a user-entered
-            # port other than the default wins over the announced one.
-            if port == UDP_PORT and probe_port != UDP_PORT:
-                port = probe_port
+            if discovery is not None:
+                probe = await discovery.async_probe(host, timeout=HANDSHAKE_TIMEOUT)
+            else:
+                probe = None
+                _LOGGER.info("KDE Connect discovery is not loaded; trying TCP handshake")
+            if probe and probe.get("device_id") and valid_device_id(str(probe["device_id"])):
+                device_id = str(probe["device_id"])
+                if probe.get("device_name"):
+                    device_name = str(probe["device_name"])
+                try:
+                    probe_port = int(probe.get("tcp_port") or UDP_PORT)
+                except (TypeError, ValueError):
+                    probe_port = UDP_PORT
+                # The probe announces the device's live TCP port; a user-entered
+                # port other than the default wins over the announced one.
+                if port == UDP_PORT and probe_port != UDP_PORT:
+                    port = probe_port
+            elif device_id is None:
+                _LOGGER.info(
+                    "KDE Connect UDP probe to %s got no identity; trying TCP handshake",
+                    host,
+                )
 
         peer = KdePeer(
             self.hass,
@@ -278,11 +279,10 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if self._peer is None:
             return self.async_abort(reason="cannot_connect")
 
-        if user_input is not None:
-            if not user_input.get("retry_again", True):
-                await self._close_peer(self._peer)
-                self._peer = None
-                return self.async_abort(reason="pairing_cancelled")
+        if user_input is not None and not user_input.get("retry_again", True):
+            await self._close_peer(self._peer)
+            self._peer = None
+            return self.async_abort(reason="pairing_cancelled")
 
         if self._peer.paired:
             return await self._async_create_entry()
