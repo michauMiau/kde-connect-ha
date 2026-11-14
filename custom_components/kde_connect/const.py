@@ -9,7 +9,9 @@ from homeassistant.const import Platform
 DOMAIN: Final = "kde_connect"
 PLATFORMS: Final[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.DEVICE_TRACKER,
+    Platform.MEDIA_PLAYER,
     Platform.NOTIFY,
     Platform.SENSOR,
 ]
@@ -35,6 +37,8 @@ PACKET_TYPE_SMS_MESSAGES: Final = "kdeconnect.sms.messages"
 PACKET_TYPE_RUNCOMMAND: Final = "kdeconnect.runcommand"
 PACKET_TYPE_RUNCOMMAND_OUTPUT: Final = "kdeconnect.runcommand.output"
 PACKET_TYPE_FIND_MY_PHONE_REQUEST: Final = "kdeconnect.findmyphone.request"
+PACKET_TYPE_MPRIS: Final = "kdeconnect.mpris"
+PACKET_TYPE_MPRIS_REQUEST: Final = "kdeconnect.mpris.request"
 
 SMS_REQUEST_PACKET_VERSION: Final = 1
 

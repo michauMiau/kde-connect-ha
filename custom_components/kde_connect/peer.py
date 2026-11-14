@@ -61,6 +61,8 @@ from .const import (
     PACKET_TYPE_BATTERY,
     PACKET_TYPE_FIND_MY_PHONE_REQUEST,
     PACKET_TYPE_IDENTITY,
+    PACKET_TYPE_MPRIS,
+    PACKET_TYPE_MPRIS_REQUEST,
     PACKET_TYPE_NOTIFICATION,
     PACKET_TYPE_NOTIFICATION_ACTION,
     PACKET_TYPE_NOTIFICATION_REPLY,
@@ -294,6 +296,9 @@ class KdePeer:
         self._loop_task = self._hass.async_create_background_task(
             self._read_loop(reader), "kde_connect_session", eager_start=True
         )
+        if self._paired and PACKET_TYPE_MPRIS in self._capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.mpris_request_player_list()
 
     async def serve(self, reader, writer, tcp_port: int | None = None) -> None:
         """Accept an inbound session started by asyncio.start_server."""
@@ -369,6 +374,9 @@ class KdePeer:
         self._loop_task = self._hass.async_create_background_task(
             self._read_loop(reader), "kde_connect_session", eager_start=True
         )
+        if self._paired and PACKET_TYPE_MPRIS in self._capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.mpris_request_player_list()
 
     async def close(self) -> None:
         """Close the session; idempotent."""
@@ -749,6 +757,8 @@ class KdePeer:
                     "exit_code": parsed.get("exit_code"),
                 },
             )
+        elif pkt_type == PACKET_TYPE_MPRIS:
+            self._handle_mpris(body)
         elif pkt_type == PACKET_TYPE_FIND_MY_PHONE_REQUEST:
             _LOGGER.debug("find-my-phone request from %s ignored", self._device_id)
         else:
@@ -775,6 +785,9 @@ class KdePeer:
         if self._paired and PACKET_TYPE_RUNCOMMAND in self._capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self._send(make_command_list_request_packet())
+        if self._paired and PACKET_TYPE_MPRIS in self._capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.mpris_request_player_list()
 
     def _handle_battery(self, body: dict[str, Any]) -> None:
         parsed = parse_battery(body)
@@ -887,6 +900,126 @@ class KdePeer:
             )
         except (HandshakeError, ProtocolError, TimeoutError):
             _LOGGER.warning("Could not deliver command output to %s", self._device_id)
+
+    # ------------------------------------------------------------------ mpris
+
+    def _handle_mpris(self, body: dict[str, Any]) -> None:
+        if body.get("transferringAlbumArt"):
+            return
+        if "playerList" in body:
+            players = body.get("playerList") or []
+            if not isinstance(players, list):
+                players = []
+            new_players: dict[str, dict[str, Any]] = {}
+            for name in players:
+                if not isinstance(name, str):
+                    continue
+                new_players[name] = dict(self.state.mpris_players.get(name, {}))
+            self.state.mpris_players = new_players
+            if not new_players:
+                self.state.mpris_current_player = None
+            elif self.state.mpris_current_player not in new_players:
+                self.state.mpris_current_player = next(iter(new_players.keys()))
+            if self.state.mpris_current_player and self._connected and self._paired:
+                self._hass.async_create_task(
+                    self.mpris_request_player_status(self.state.mpris_current_player)
+                )
+
+        player = body.get("player")
+        if isinstance(player, str) and player:
+            info = dict(self.state.mpris_players.get(player, {}))
+            for key in (
+                "title",
+                "artist",
+                "album",
+                "albumArtUrl",
+                "url",
+                "loopStatus",
+            ):
+                if key in body:
+                    info[key] = body.get(key)
+            for key in (
+                "isPlaying",
+                "canPause",
+                "canPlay",
+                "canGoNext",
+                "canGoPrevious",
+                "canSeek",
+                "shuffle",
+            ):
+                if key in body:
+                    info[key] = bool(body.get(key))
+            for key in ("volume", "length", "pos"):
+                if key in body:
+                    try:
+                        info[key] = int(body.get(key))
+                    except (TypeError, ValueError):
+                        pass
+            self.state.mpris_players[player] = info
+            if self.state.mpris_current_player is None:
+                self.state.mpris_current_player = player
+
+        self.state.notify_changed()
+
+    async def mpris_request_player_list(self) -> None:
+        if not self._connected or not self._paired:
+            return
+        if PACKET_TYPE_MPRIS not in self._capabilities:
+            return
+        await self._send(build_packet(PACKET_TYPE_MPRIS_REQUEST, {"requestPlayerList": True}))
+
+    async def mpris_request_player_status(self, player: str | None = None) -> None:
+        player = player or self.state.mpris_current_player
+        if not player:
+            return
+        await self._send_plugin(
+            build_packet(
+                PACKET_TYPE_MPRIS_REQUEST,
+                {"player": player, "requestNowPlaying": True, "requestVolume": True},
+            )
+        )
+
+    async def mpris_set_player(self, player: str) -> None:
+        if player in self.state.mpris_players:
+            self.state.mpris_current_player = player
+            self.state.notify_changed()
+        await self.mpris_request_player_status(player)
+
+    async def mpris_action(self, action: str) -> None:
+        player = self.state.mpris_current_player
+        if not player and self.state.mpris_players:
+            player = next(iter(self.state.mpris_players.keys()))
+        if not player:
+            raise ProtocolError("No MPRIS player available")
+        await self._send_plugin(
+            build_packet(PACKET_TYPE_MPRIS_REQUEST, {"player": player, "action": action})
+        )
+
+    async def mpris_set_volume(self, volume: int) -> None:
+        player = self.state.mpris_current_player
+        if not player and self.state.mpris_players:
+            player = next(iter(self.state.mpris_players.keys()))
+        if not player:
+            raise ProtocolError("No MPRIS player available")
+        await self._send_plugin(
+            build_packet(
+                PACKET_TYPE_MPRIS_REQUEST,
+                {"player": player, "setVolume": max(0, min(100, int(volume)))},
+            )
+        )
+
+    async def mpris_set_position(self, position_ms: int) -> None:
+        player = self.state.mpris_current_player
+        if not player and self.state.mpris_players:
+            player = next(iter(self.state.mpris_players.keys()))
+        if not player:
+            raise ProtocolError("No MPRIS player available")
+        await self._send_plugin(
+            build_packet(
+                PACKET_TYPE_MPRIS_REQUEST,
+                {"player": player, "SetPosition": int(position_ms)},
+            )
+        )
 
 
 Peer = KdePeer  # compatibility alias for earlier worker drafts

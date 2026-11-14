@@ -72,6 +72,8 @@ class DeviceState:
     notification_count: int = 0
     sms_unread_count: int = 0
     notifications: list[dict[str, Any]] = field(default_factory=list)
+    mpris_players: dict[str, dict[str, Any]] = field(default_factory=dict)
+    mpris_current_player: str | None = None
 
     _listeners: list[Callable[[], None]] = field(default_factory=list, repr=False)
 
@@ -337,20 +339,15 @@ def entity_descriptions_for_peer(peer: KdePeer) -> list[str]:
     return keys
 
 
-def _has_battery(peer: KdePeer) -> bool:
-    """Return True when the peer is expected to report battery state."""
-    if PACKET_TYPE_BATTERY not in peer.capabilities:
-        return False
-    # Desktops usually do not have a battery; avoid creating empty entities.
-    return (peer.device_type or "").lower() != "desktop"
+def peer_has_battery_capability(peer: KdePeer) -> bool:
+    """Return True when the peer advertises battery capability."""
+    return PACKET_TYPE_BATTERY in peer.capabilities
 
 
 def sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[SensorEntity]:
     """Sensor entities gated on the peer's advertised capabilities."""
     entities: list[SensorEntity] = []
     caps = peer.capabilities
-    if _has_battery(peer):
-        entities.append(KdeBatteryPercentEntity(peer, state))
     if PACKET_TYPE_PING in caps:
         entities.append(KdePingLatencyEntity(peer, state))
     if PACKET_TYPE_NOTIFICATION in caps:
@@ -364,8 +361,6 @@ def sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[SensorEn
 
 def binary_sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[BinarySensorEntity]:
     """Binary sensor entities gated on the peer's advertised capabilities."""
-    if _has_battery(peer):
-        return [KdeBatteryChargingEntity(peer, state)]
     return []
 
 

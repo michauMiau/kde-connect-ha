@@ -515,29 +515,8 @@ class KdeConnectManager:
 
     # ---------------------------------------------------------------- repairs
     def _sync_pairing_issue(self, device_id: str) -> None:
-        entry_id = self.device_entries.get(device_id)
-        if entry_id is None:
-            return
-        entry = self.hass.config_entries.async_get_entry(entry_id)
-        if entry is None:
-            return
-        peer = self.peers.get(device_id)
-        if peer is not None and peer.paired:
-            self._clear_pairing_issue(device_id)
-            return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
-            f"pairing_pending_{device_id}",
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="pairing_pending",
-            translation_placeholders={
-                "device_name": entry.data.get(CONF_DEVICE_NAME, entry.title)
-            },
-            data={"device_id": device_id},
-        )
+        # Pairing is handled by config flow/UI; avoid persistent repair spam.
+        self._clear_pairing_issue(device_id)
 
     def _clear_pairing_issue(self, device_id: str) -> None:
         ir.async_delete_issue(self.hass, DOMAIN, f"pairing_pending_{device_id}")
