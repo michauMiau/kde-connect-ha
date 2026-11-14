@@ -22,6 +22,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
+    CONF_DEVICE_ID,
     DISCOVERY_INTERVAL,
     DISCOVERY_SWEEP_INTERVAL,
     DOMAIN,
@@ -215,18 +216,50 @@ class KdeConnectDiscovery:
         self._hass.bus.async_fire(EVENT_DEVICE_DISCOVERED, data)
 
         # A UDP reply from a device we have not configured -> discovery flow.
-        self._hass.async_create_background_task(
-            self._async_start_discovery_flow(data),
-            f"kde_connect_discovery_{device_id}",
-            eager_start=True,
-        )
+        if not self._device_known_or_flow_in_progress(device_id):
+            self._hass.async_create_background_task(
+                self._async_start_discovery_flow(data),
+                f"kde_connect_discovery_{device_id}",
+                eager_start=True,
+            )
+
+    def _device_known_or_flow_in_progress(self, device_id: str) -> bool:
+        """Return True if device is configured or its config flow is active."""
+        for entry in self._hass.config_entries.async_entries(DOMAIN):
+            if entry.unique_id == device_id or entry.data.get(CONF_DEVICE_ID) == device_id:
+                return True
+        try:
+            flows = self._hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        except AttributeError:
+            flows = [
+                f
+                for f in self._hass.config_entries.flow.async_progress()
+                if f.get("handler") == DOMAIN
+            ]
+        return any(f.get("context", {}).get("unique_id") == device_id for f in flows)
 
     async def _async_start_discovery_flow(self, data: dict[str, Any]) -> None:
         """Kick off a discovery config flow for an unknown device."""
+        device_id = data.get("device_id")
+        if not device_id:
+            return
+        for entry in self._hass.config_entries.async_entries(DOMAIN):
+            if entry.unique_id == device_id or entry.data.get(CONF_DEVICE_ID) == device_id:
+                return
+        try:
+            flows = self._hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        except AttributeError:
+            flows = [
+                f
+                for f in self._hass.config_entries.flow.async_progress()
+                if f.get("handler") == DOMAIN
+            ]
+        if any(f.get("context", {}).get("unique_id") == device_id for f in flows):
+            return
         try:
             await self._hass.config_entries.flow.async_init(
                 DOMAIN,
-                context={"source": "discovery", "unique_id": data["device_id"]},
+                context={"source": "discovery", "unique_id": device_id},
                 data=data,
             )
         except Exception:

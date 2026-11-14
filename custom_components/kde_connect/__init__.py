@@ -25,15 +25,20 @@ import socket
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import (
     config_validation as cv,
+)
+from homeassistant.helpers import (
     device_registry as dr,
+)
+from homeassistant.helpers import (
     entity_registry as er,
+)
+from homeassistant.helpers import (
     issue_registry as ir,
 )
 from homeassistant.helpers.storage import Store
@@ -434,19 +439,33 @@ class KdeConnectManager:
             "protocol_version": int(body.get("protocolVersion") or protocol.PROTOCOL_VERSION),
         }
         self.hass.bus.async_fire(EVENT_DEVICE_DISCOVERED, data)
-        if host:
-            try:
-                self.hass.async_create_background_task(
-                    self.hass.config_entries.flow.async_init(
-                        DOMAIN,
-                        context={"source": "discovery", "unique_id": device_id},
-                        data=data,
-                    ),
-                    f"kde_connect_discovery_{device_id}",
-                    eager_start=True,
-                )
-            except Exception:
-                _LOGGER.debug("KDE Connect discovery flow init failed", exc_info=True)
+        if not host:
+            return
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.unique_id == device_id or entry.data.get(CONF_DEVICE_ID) == device_id:
+                return
+        try:
+            flows = self.hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        except AttributeError:
+            flows = [
+                f
+                for f in self.hass.config_entries.flow.async_progress()
+                if f.get("handler") == DOMAIN
+            ]
+        if any(f.get("context", {}).get("unique_id") == device_id for f in flows):
+            return
+        try:
+            self.hass.async_create_background_task(
+                self.hass.config_entries.flow.async_init(
+                    DOMAIN,
+                    context={"source": "discovery", "unique_id": device_id},
+                    data=data,
+                ),
+                f"kde_connect_discovery_{device_id}",
+                eager_start=True,
+            )
+        except Exception:
+            _LOGGER.debug("KDE Connect discovery flow init failed", exc_info=True)
 
     # -------------------------------------------------------------- reconnect
     async def _async_reconnect_loop(self, entry_id: str, peer: KdePeer) -> None:
@@ -667,7 +686,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         await manager.stop()
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_ha_stop)
-    hass.bus.async_listen(EVENT_PAIR_CHANGED, manager._on_pair_changed)  # noqa: SLF001
+    hass.bus.async_listen(EVENT_PAIR_CHANGED, manager._on_pair_changed)
 
     _register_services(hass, manager)
     return True

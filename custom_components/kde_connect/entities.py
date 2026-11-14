@@ -47,6 +47,7 @@ from .const import (
     PACKET_TYPE_BATTERY,
     PACKET_TYPE_NOTIFICATION,
     PACKET_TYPE_PING,
+    PACKET_TYPE_RUNCOMMAND,
     PACKET_TYPE_SMS_MESSAGES,
 )
 
@@ -180,6 +181,7 @@ class KdePingLatencyEntity(KdeEntityBase, SensorEntity):
 class KdeNotificationsReceivedEntity(KdeEntityBase, SensorEntity):
     """Counter of notifications received via kdeconnect.notification pushes."""
 
+    _attr_entity_registry_enabled_default = False
     entity_description: SensorEntityDescription
 
     def __init__(self, peer: KdePeer, state: DeviceState) -> None:
@@ -203,7 +205,7 @@ class KdeNotificationsReceivedEntity(KdeEntityBase, SensorEntity):
 
 
 class KdeSmsUnreadEntity(KdeEntityBase, SensorEntity):
-    """Unread SMS counter fed by kdeconnect.sms.messages pushes."""
+    """Count of unread SMS threads/conversations seen in recent syncs."""
 
     entity_description: SensorEntityDescription
 
@@ -211,12 +213,35 @@ class KdeSmsUnreadEntity(KdeEntityBase, SensorEntity):
         """Initialize the unread SMS counter."""
         super().__init__(peer, state)
         self.entity_description = SMS_UNREAD_DESCRIPTION
-        self._attr_unique_id = f"{peer.device_id}-{SMS_UNREAD_DESCRIPTION.key}"
+        self._attr_unique_id = f"{peer.device_id}-sms-unread"
 
     @property
     def native_value(self) -> int:
-        """Return the count of unread SMS messages."""
+        """Return the unread SMS count seen in the latest sync."""
         return self._state.sms_unread_count
+
+
+class KdeRemoteCommandsEntity(KdeEntityBase, SensorEntity):
+    """Remote commands advertised by the peer's runcommand plugin."""
+
+    entity_description: SensorEntityDescription
+
+    def __init__(self, peer: KdePeer, state: DeviceState) -> None:
+        """Initialize the remote commands sensor."""
+        super().__init__(peer, state)
+        self.entity_description = REMOTE_COMMANDS_DESCRIPTION
+        self._attr_unique_id = f"{peer.device_id}-remote-commands"
+
+    @property
+    def native_value(self) -> int:
+        """Return number of available remote commands."""
+        return len(getattr(self._peer, "commands", {}) or {})
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose command keys/names for use with kde_connect.run_command."""
+        commands = getattr(self._peer, "commands", {}) or {}
+        return {"commands": commands}
 
 
 class KdePresenceEntity(KdeEntityBase, ScannerEntity):
@@ -279,7 +304,14 @@ NOTIFICATIONS_DESCRIPTION = SensorEntityDescription(
 
 SMS_UNREAD_DESCRIPTION = SensorEntityDescription(
     key="sms_unread",
-    state_class=SensorStateClass.TOTAL,
+    icon="mdi:message-badge",
+    state_class=SensorStateClass.MEASUREMENT,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+REMOTE_COMMANDS_DESCRIPTION = SensorEntityDescription(
+    key="remote_commands",
+    icon="mdi:console",
     entity_category=EntityCategory.DIAGNOSTIC,
 )
 
@@ -305,11 +337,19 @@ def entity_descriptions_for_peer(peer: KdePeer) -> list[str]:
     return keys
 
 
+def _has_battery(peer: KdePeer) -> bool:
+    """Return True when the peer is expected to report battery state."""
+    if PACKET_TYPE_BATTERY not in peer.capabilities:
+        return False
+    # Desktops usually do not have a battery; avoid creating empty entities.
+    return (peer.device_type or "").lower() != "desktop"
+
+
 def sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[SensorEntity]:
     """Sensor entities gated on the peer's advertised capabilities."""
     entities: list[SensorEntity] = []
     caps = peer.capabilities
-    if PACKET_TYPE_BATTERY in caps:
+    if _has_battery(peer):
         entities.append(KdeBatteryPercentEntity(peer, state))
     if PACKET_TYPE_PING in caps:
         entities.append(KdePingLatencyEntity(peer, state))
@@ -317,12 +357,14 @@ def sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[SensorEn
         entities.append(KdeNotificationsReceivedEntity(peer, state))
     if PACKET_TYPE_SMS_MESSAGES in caps:
         entities.append(KdeSmsUnreadEntity(peer, state))
+    if PACKET_TYPE_RUNCOMMAND in caps:
+        entities.append(KdeRemoteCommandsEntity(peer, state))
     return entities
 
 
 def binary_sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[BinarySensorEntity]:
     """Binary sensor entities gated on the peer's advertised capabilities."""
-    if PACKET_TYPE_BATTERY in peer.capabilities:
+    if _has_battery(peer):
         return [KdeBatteryChargingEntity(peer, state)]
     return []
 

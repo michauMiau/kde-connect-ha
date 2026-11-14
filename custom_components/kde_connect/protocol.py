@@ -30,19 +30,19 @@ Verified against KDE/kdeconnect-kde master:
 from __future__ import annotations
 
 import asyncio
-from asyncio import sslproto
 import contextlib
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import socket
 import ssl
 import tempfile
 import time
+from asyncio import sslproto
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from cryptography import x509
@@ -826,11 +826,11 @@ async def upgrade_tls(
     handshake deadlocks on already-buffered bytes.
     """
     await writer.drain()
-    leftover = bytes(reader._buffer)  # noqa: SLF001
-    reader._buffer.clear()  # noqa: SLF001
+    leftover = bytes(reader._buffer)
+    reader._buffer.clear()
 
     loop = asyncio.get_running_loop()
-    protocol = writer._protocol  # noqa: SLF001
+    protocol = writer._protocol
 
     waiter = loop.create_future()
     ssl_protocol = sslproto.SSLProtocol(
@@ -847,7 +847,7 @@ async def upgrade_tls(
     transport.pause_reading()
     transport.set_protocol(ssl_protocol)
     if leftover:
-        feed_cb = loop.call_soon(ssl_protocol._incoming.write, leftover)  # noqa: SLF001
+        feed_cb = loop.call_soon(ssl_protocol._incoming.write, leftover)
     else:
         feed_cb = None
     conmade_cb = loop.call_soon(ssl_protocol.connection_made, transport)
@@ -862,9 +862,9 @@ async def upgrade_tls(
         resume_cb.cancel()
         raise
 
-    new_transport = ssl_protocol._app_transport  # noqa: SLF001
-    writer._transport = new_transport  # noqa: SLF001
-    protocol._replace_transport(new_transport)  # noqa: SLF001
+    new_transport = ssl_protocol._app_transport
+    writer._transport = new_transport
+    protocol._replace_transport(new_transport)
 
 
 def peer_certificate(writer: Any, device_id: str | None = None) -> str | None:

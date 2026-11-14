@@ -20,8 +20,8 @@ recipients are therefore passed as a ``target`` keyword argument to
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
 import uuid
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.notify import (
     NotifyEntity,
@@ -54,6 +54,7 @@ class KdeNotificationNotifyEntity(KdeEntityBase, NotifyEntity):
 
     entity_description: NotifyEntityDescription
     _attr_supported_features = NotifyEntityFeature.TITLE
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, peer: KdePeer, state: DeviceState) -> None:
         """Initialize the device notification entity."""
@@ -88,6 +89,7 @@ class KdeSmsNotifyEntity(KdeEntityBase, NotifyEntity):
     """
 
     entity_description: NotifyEntityDescription
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, peer: KdePeer, state: DeviceState) -> None:
         """Initialize the SMS notify entity."""

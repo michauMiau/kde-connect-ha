@@ -40,10 +40,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -94,6 +94,7 @@ from .protocol import (
     decode_packet,
     encode_packet,
     load_certificate,
+    make_command_list_request_packet,
     make_connection_packet,
     make_encrypted_identity,
     make_find_my_phone_packet,
@@ -555,12 +556,17 @@ class KdePeer:
 
     # ------------------------------------------------------------------ services
 
-    async def request_pair(self) -> bool:
-        """Send a pair request; wait for the peer/owner acceptance."""
+    async def send_pair_request(self) -> None:
+        """Send a pair request without waiting for the peer to accept."""
         if not self._connected:
             raise HandshakeError("peer session is not connected")
         self._pair_event.clear()
+        self.state.notify_changed()
         await self._send(make_pair_request(int(time.time())))
+
+    async def request_pair(self) -> bool:
+        """Send a pair request; wait for the peer/owner acceptance."""
+        await self.send_pair_request()
         try:
             await asyncio.wait_for(self._pair_event.wait(), timeout=PAIRING_TIMEOUT)
         except TimeoutError:
@@ -764,8 +770,11 @@ class KdePeer:
         else:
             self._paired = False  # accepted/cancelled/unpaired
         self._pair_event.set()
-        self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": self._paired})
         self.state.notify_changed()
+        self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": self._paired})
+        if self._paired and PACKET_TYPE_RUNCOMMAND in self._capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self._send(make_command_list_request_packet())
 
     def _handle_battery(self, body: dict[str, Any]) -> None:
         parsed = parse_battery(body)

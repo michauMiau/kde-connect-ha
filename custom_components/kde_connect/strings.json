@@ -11,10 +11,10 @@
         }
       },
       "pair": {
-        "title": "Pairing",
-        "description": "Open KDE Connect on the device and accept the pairing request for \"Home Assistant\". Then press Continue.",
+        "title": "Pair with device",
+        "description": "A pairing request was sent from Home Assistant to the device. On the device, open KDE Connect and accept the pairing request from Home Assistant, then select Submit.",
         "data": {
-          "retry_again": "Continue pairing"
+          "submit": "I accepted the pairing request on the device"
         }
       }
     },
@@ -54,6 +54,9 @@
       },
       "sms_unread": {
         "name": "Unread SMS"
+      },
+      "remote_commands": {
+        "name": "Remote commands"
       }
     },
     "binary_sensor": {

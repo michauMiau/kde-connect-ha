@@ -21,7 +21,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -179,9 +178,27 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         self._capabilities = sorted(peer.capabilities)
         return True
 
+    async def _async_abort_progress_for_device(self, device_id: str) -> None:
+        """Abort other in-progress flows for the same device."""
+        try:
+            flows = self.hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        except AttributeError:
+            flows = [
+                f
+                for f in self.hass.config_entries.flow.async_progress()
+                if f.get("handler") == DOMAIN
+            ]
+        for flow in flows:
+            if flow.get("flow_id") == self.flow_id:
+                continue
+            if flow.get("context", {}).get("unique_id") == device_id:
+                self.hass.config_entries.flow.async_abort(flow["flow_id"])
+
     async def _async_set_unique_id_or_close(self) -> None:
         """Register the deviceId as unique id; close the peer on abort."""
         try:
+            if self._device_id:
+                await self._async_abort_progress_for_device(self._device_id)
             await self.async_set_unique_id(self._device_id)
         except AbortFlow:
             if self._peer is not None:
@@ -203,9 +220,12 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self._close_peer(self._peer)
                 self._peer = None
             raise
+        # Abort duplicate in-progress discovery flows for the same device so
+        # a manual/user flow is not rejected as "already in progress".
+        await self._async_abort_progress_for_device(self._device_id)
         if not self._peer.paired:
             try:
-                await self._peer.request_pair()
+                await self._peer.send_pair_request()
             except ProtocolError:
                 _LOGGER.debug("KDE Connect pairing request failed", exc_info=True)
         if self._peer.paired:

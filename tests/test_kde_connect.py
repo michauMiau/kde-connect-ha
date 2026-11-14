@@ -1,4 +1,3 @@
-# noqa: INP001
 """Functional tests for the KDE Connect integration against an in-process fake device.
 
 Each test drives a real TCP/TLS protocol-v8 handshake (certificates with
@@ -24,6 +23,14 @@ import contextlib
 import json
 import time
 from typing import Any, Self
+
+import pytest
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import STATE_UNAVAILABLE, Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.setup import async_setup_component
+from tests.common import MockConfigEntry
 
 from custom_components.kde_connect import protocol
 from custom_components.kde_connect.const import (
@@ -51,14 +58,6 @@ from custom_components.kde_connect.const import (
     SERVICE_SEND_SMS,
 )
 from custom_components.kde_connect.peer import KdePeer
-import pytest
-
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import STATE_UNAVAILABLE, Platform
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.setup import async_setup_component
-from tests.common import MockConfigEntry  # noqa: TID251 - harness entry-mock helper
 
 # The HA harness blocks sockets per test (pytest-socket); this module drives
 # real loopback TCP sessions. enable_socket() restores socket creation but the
