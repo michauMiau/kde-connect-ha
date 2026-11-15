@@ -515,12 +515,12 @@ async def test_outbound_tls_handshake_creates_entities_and_persisted_identity(
         assert device.model == "android"
 
 
-async def test_pairing_request_accepted_clears_repair_issue(
+async def test_pairing_request_does_not_create_repair_issue(
     hass: HomeAssistant,
     enable_custom_integrations: None,
     issue_registry: Any,
 ) -> None:
-    """Without an auto-pairing device, request_pair() wires a pair answer."""
+    """Pairing is handled in flow/UI; no persistent repair issue is created."""
     events: list[Any] = []
 
     async with FakeDevice(name="Phone", auto_pair=False) as fake:
@@ -535,8 +535,7 @@ async def test_pairing_request_accepted_clears_repair_issue(
         peer = manager.peers[fake.device_id]
 
         assert peer.connected and not peer.paired
-        issue = issue_registry.async_get_issue(DOMAIN, f"pairing_pending_{fake.device_id}")
-        assert issue is not None
+        assert issue_registry.async_get_issue(DOMAIN, f"pairing_pending_{fake.device_id}") is None
 
         assert await peer.request_pair() is True
         await asyncio.sleep(0.2)

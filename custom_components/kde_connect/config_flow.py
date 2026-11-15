@@ -223,11 +223,6 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         # Abort duplicate in-progress discovery flows for the same device so
         # a manual/user flow is not rejected as "already in progress".
         await self._async_abort_progress_for_device(self._device_id)
-        if not self._peer.paired:
-            try:
-                await self._peer.send_pair_request()
-            except ProtocolError:
-                _LOGGER.debug("KDE Connect pairing request failed", exc_info=True)
         if self._peer.paired:
             return await self._async_create_entry()
         return await self.async_step_pair()
@@ -295,20 +290,21 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Pairing step: send the request, wait for the device-side prompt."""
+        """Pairing step: send the request only on explicit user action."""
         if self._peer is None:
             return self.async_abort(reason="cannot_connect")
-
-        if user_input is not None and not user_input.get("retry_again", True):
-            await self._close_peer(self._peer)
-            self._peer = None
-            return self.async_abort(reason="pairing_cancelled")
 
         if self._peer.paired:
             return await self._async_create_entry()
 
-        # request_pair() waits PAIRING_TIMEOUT internally; the device shows a
-        # prompt on its side and answers the pair packet.
+        if user_input is None:
+            return self.async_show_form(step_id="pair", data_schema=_RETRY_SCHEMA)
+
+        if not user_input.get("retry_again", True):
+            await self._close_peer(self._peer)
+            self._peer = None
+            return self.async_abort(reason="pairing_cancelled")
+
         try:
             paired = await self._peer.request_pair()
         except ProtocolError as err:
