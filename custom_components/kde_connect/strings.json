@@ -37,9 +37,11 @@
     "step": {
       "init": {
         "title": "KDE Connect options",
-        "description": "Default SMS recipients (one per line, phone numbers).",
+        "description": "Default SMS recipients (one per line, phone numbers). Local run-commands: one per line as 'key=command'; enable execution to let the device trigger them on this Home Assistant host.",
         "data": {
-          "sms_targets": "Default SMS recipients"
+          "sms_targets": "Default SMS recipients",
+          "allow_remote_commands": "Allow the device to run local commands",
+          "commands": "Local commands (key=command, one per line)"
         }
       }
     }
@@ -57,9 +59,6 @@
       },
       "sms_unread": {
         "name": "Unread SMS"
-      },
-      "remote_commands": {
-        "name": "Remote commands"
       }
     },
     "binary_sensor": {
@@ -150,16 +149,6 @@
         "message": {
           "name": "Message",
           "description": "Reply text."
-        }
-      }
-    },
-    "run_command": {
-      "name": "Run command",
-      "description": "Runs a command registered by the device's run-command plugin.",
-      "fields": {
-        "command": {
-          "name": "Command",
-          "description": "Command key from the device command list."
         }
       }
     }

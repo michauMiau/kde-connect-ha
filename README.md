@@ -8,10 +8,12 @@ Also check out [KOSPEL PPE4 for Home Assistant](https://github.com/michauMiau/pp
 
 ## Features
 
-- Full KDE Connect protocol v8: UDP discovery, TCP sessions, plaintext packet + TLS (KDE's inverted TLS roles), encrypted identity, pairing trust-on-first-use
+- Full KDE Connect protocol v8: UDP listen/probe, TCP sessions, plaintext packet + TLS (KDE's inverted TLS roles), encrypted identity, pairing trust-on-first-use
 - **Sensors**: battery charge, charging state, battery quantity; device availability
-- **Services**: ping, send notification, cancel notification, request notifications, notification reply, SMS, phone notification, find-my-phone, runcommand
-- **Events**: discovery, pair request, battery change, ping, notifications, SMS, command output
+- **Media player**: MPRIS remote control of the device's active player (play/pause/next/previous/seek/volume/source)
+- **Run commands**: HA acts as the desktop side — define `key=command` lines in the entry options, enable execution, and trigger them from KDE Connect on the device
+- **Services**: send notification, cancel notification, request notifications, notification reply, SMS, find-my-phone
+- **Events**: device discovered, pair request, battery change, ping, notifications, SMS, command output
 
 ## Installation
 
@@ -34,9 +36,15 @@ Also check out [KOSPEL PPE4 for Home Assistant](https://github.com/michauMiau/pp
 [![Open your Home Assistant instance and start setting up.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=kde_connect)
 
 Or: *Settings → Devices & Services → Add Integration → **KDE Connect***.
-Devices broadcasting on the LAN are announced as discovery flows; a KDE Connect peer
-sent to the integration appears as an unknown-device flow. Pair the device from KDE
-Connect on the peer and accept the pairing prompt in Home Assistant.
+
+The wizard offers a **one-time local network scan** (no background broadcasting or
+sweeping) that lists discovered devices by name, id and IP, or manual host entry.
+Pairing is only sent after you confirm it in the pairing step; accept it in KDE
+Connect on the device.
+
+To run commands on the Home Assistant host from the device, open the entry's
+**Options**, add `key=command` lines and enable *Allow the device to run local
+commands*.
 
 ## Development
 

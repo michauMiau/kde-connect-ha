@@ -78,13 +78,3 @@ notification_reply:
         text:
           multiline: true
       name: Reply text
-run_command:
-  target:
-    entity:
-      integration: kde_connect
-  fields:
-    command:
-      required: true
-      selector:
-        text:
-      name: Command id

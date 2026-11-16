@@ -65,6 +65,7 @@ from .const import (
     PACKET_TYPE_PING,
     PACKET_TYPE_RUNCOMMAND,
     PACKET_TYPE_RUNCOMMAND_OUTPUT,
+    PACKET_TYPE_RUNCOMMAND_REQUEST,
     PACKET_TYPE_SMS_MESSAGES,
     PACKET_TYPE_SMS_REQUEST,
     PROTOCOL_VERSION,
@@ -237,6 +238,7 @@ CAPABILITY_SMS_MESSAGES = PACKET_TYPE_SMS_MESSAGES
 CAPABILITY_SMS_REQUEST = PACKET_TYPE_SMS_REQUEST
 CAPABILITY_RUNCOMMAND = PACKET_TYPE_RUNCOMMAND
 CAPABILITY_RUNCOMMAND_OUTPUT = PACKET_TYPE_RUNCOMMAND_OUTPUT
+CAPABILITY_RUNCOMMAND_REQUEST = PACKET_TYPE_RUNCOMMAND_REQUEST
 CAPABILITY_FIND_MY_PHONE = PACKET_TYPE_FIND_MY_PHONE_REQUEST
 CAPABILITY_MPRIS = PACKET_TYPE_MPRIS
 CAPABILITY_MPRIS_REQUEST = PACKET_TYPE_MPRIS_REQUEST
@@ -251,8 +253,7 @@ DEFAULT_INCOMING_CAPABILITIES: list[str] = [
     CAPABILITY_NOTIFICATION_ACTION,
     CAPABILITY_SMS,
     CAPABILITY_SMS_MESSAGES,
-    CAPABILITY_RUNCOMMAND,
-    CAPABILITY_RUNCOMMAND_OUTPUT,
+    CAPABILITY_RUNCOMMAND_REQUEST,
     CAPABILITY_MPRIS,
 ]
 
@@ -544,53 +545,81 @@ def parse_sms_messages(packet: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Runcommand
+# Runcommand (HA is the desktop side: it owns the command list and executes
+# commands requested by the peer via ``kdeconnect.runcommand.request``)
 # ---------------------------------------------------------------------------
 
+def make_command_list_packet(
+    commands: dict[str, dict[str, str]] | None = None,
+    *,
+    can_add_command: bool = True,
+) -> dict[str, Any]:
+    """Advertise this device's command list (``commandList`` is a JSON string)."""
+    payload = {
+        key: {"name": info.get("name") or key, "command": info.get("command") or ""}
+        for key, info in (commands or {}).items()
+    }
+    return build_packet(
+        PACKET_TYPE_RUNCOMMAND,
+        {"commandList": json.dumps(payload), "canAddCommand": can_add_command},
+    )
+
+
+def make_command_request_packet(body: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``kdeconnect.runcommand.request`` packet (peer -> desktop)."""
+    return build_packet(PACKET_TYPE_RUNCOMMAND_REQUEST, body)
+
+
 def make_command_list_request_packet() -> dict[str, Any]:
-    """Ask the peer for its advertised ``commandList``."""
-    return build_packet(PACKET_TYPE_RUNCOMMAND, {"requestCommandList": True})
+    """Ask the peer to re-send its command list (peer -> desktop direction)."""
+    return make_command_request_packet({"requestCommandList": True})
 
 
-def make_run_command_packet(key: str) -> dict[str, Any]:
-    """Run a command the peer announced in its ``commandList``."""
-    return build_packet(PACKET_TYPE_RUNCOMMAND, {"key": key})
-
-
-def make_stop_commands_packet(*, stop_all: bool = True) -> dict[str, Any]:
-    """Ask the peer to stop running remote commands."""
-    return build_packet(PACKET_TYPE_RUNCOMMAND, {"stop": True if stop_all else None})
+def make_command_output_packet(
+    *,
+    command_id: int,
+    command: str | None = None,
+    stdout: list[str] | None = None,
+    stderr: list[str] | None = None,
+    success: bool | None = None,
+    exit_code: int | None = None,
+    started: bool = False,
+    finished: bool = False,
+    output: bool = False,
+) -> dict[str, Any]:
+    """Build a ``kdeconnect.runcommand.output`` progress packet."""
+    body: dict[str, Any] = {"id": command_id}
+    if started:
+        body["commandStarted"] = True
+        if command is not None:
+            body["command"] = command
+    if output:
+        body["commandOutput"] = True
+        body["stdout"] = list(stdout or [])
+        body["stderr"] = list(stderr or [])
+    if finished:
+        body["commandFinished"] = True
+        body["success"] = bool(success)
+        body["exitCode"] = int(exit_code or 0)
+    return build_packet(PACKET_TYPE_RUNCOMMAND_OUTPUT, body)
 
 
 def parse_runcommand(packet: dict[str, Any]) -> dict[str, Any]:
     """Normalize an incoming ``kdeconnect.runcommand``/``.output`` body."""
     body = _body_of(packet)
     if body.get("commandList") is not None:
-        return {
-            "kind": "command_list",
-            "commands": {
-                key: {"name": cmd.get("name", ""), "command": cmd.get("command", "")}
-                for key, cmd in body["commandList"].items()
-            },
-        }
-    if body.get("request"):
-        return {
-            "kind": "command_requested",
-            "command": body.get("command", ""),
-            "name": body.get("name", ""),
-            "id": body.get("commandId") or body.get("id", ""),
-        }
-    if body.get("stdout") is not None or body.get("stderr") is not None:
-        return {
-            "kind": "output",
-            "stdout": body.get("stdout") or "",
-            "stderr": body.get("stderr") or "",
-            "id": body.get("id", ""),
-        }
+        return {"kind": "command_list", "raw": body.get("commandList")}
     if body.get("commandStarted"):
         return {
             "kind": "started",
             "command": body.get("command", ""),
+            "id": body.get("id", ""),
+        }
+    if body.get("commandOutput"):
+        return {
+            "kind": "output",
+            "stdout": body.get("stdout") or [],
+            "stderr": body.get("stderr") or [],
             "id": body.get("id", ""),
         }
     if body.get("commandFinished"):

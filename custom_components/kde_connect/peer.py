@@ -69,8 +69,8 @@ from .const import (
     PACKET_TYPE_NOTIFICATION_REQUEST,
     PACKET_TYPE_PAIR,
     PACKET_TYPE_PING,
-    PACKET_TYPE_RUNCOMMAND,
     PACKET_TYPE_RUNCOMMAND_OUTPUT,
+    PACKET_TYPE_RUNCOMMAND_REQUEST,
     PACKET_TYPE_SMS_MESSAGES,
     PACKET_TYPE_SMS_REQUEST,
     PAIRING_TIMEOUT,
@@ -96,7 +96,8 @@ from .protocol import (
     decode_packet,
     encode_packet,
     load_certificate,
-    make_command_list_request_packet,
+    make_command_list_packet,
+    make_command_output_packet,
     make_connection_packet,
     make_encrypted_identity,
     make_find_my_phone_packet,
@@ -106,7 +107,6 @@ from .protocol import (
     make_pair_request,
     make_pair_unpair,
     make_ping_packet,
-    make_run_command_packet,
     parse_battery,
     parse_notification,
     parse_runcommand,
@@ -161,6 +161,8 @@ class KdePeer:
         self._device_type = peer_device_type
         self._peer_cert_pem = peer_cert_pem
         self._capabilities = {str(name) for name in peer_capabilities or ()}
+        self._send_capabilities: set[str] = set()
+        self._receive_capabilities: set[str] = set()
         self._incoming = list(incoming_capabilities or DEFAULT_INCOMING_CAPABILITIES)
         self._allow_remote_commands = allow_remote_commands
         self._local_commands = dict(local_commands or {})
@@ -169,7 +171,7 @@ class KdePeer:
         self._tcp_port = tcp_port
 
         self.state = DeviceState()
-        self.commands: dict[str, dict[str, str]] = {}
+        self._command_counter = 0
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -201,8 +203,20 @@ class KdePeer:
 
     @property
     def capabilities(self) -> set[str]:
-        """Packet types the peer can push to us (wire string list names)."""
+        """Union of packet types the peer advertises (both directions)."""
+        if self._send_capabilities or self._receive_capabilities:
+            return self._send_capabilities | self._receive_capabilities
         return self._capabilities
+
+    @property
+    def send_capabilities(self) -> set[str]:
+        """Packet types the peer can receive (HA -> peer direction)."""
+        return self._send_capabilities or self._capabilities
+
+    @property
+    def receive_capabilities(self) -> set[str]:
+        """Packet types the peer can send (peer -> HA direction)."""
+        return self._receive_capabilities
 
     @property
     def connected(self) -> bool:
@@ -296,9 +310,12 @@ class KdePeer:
         self._loop_task = self._hass.async_create_background_task(
             self._read_loop(reader), "kde_connect_session", eager_start=True
         )
-        if self._paired and PACKET_TYPE_MPRIS in self._capabilities:
+        if self._paired and PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.mpris_request_player_list()
+        if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.send_command_list()
 
     async def serve(self, reader, writer, tcp_port: int | None = None) -> None:
         """Accept an inbound session started by asyncio.start_server."""
@@ -374,9 +391,12 @@ class KdePeer:
         self._loop_task = self._hass.async_create_background_task(
             self._read_loop(reader), "kde_connect_session", eager_start=True
         )
-        if self._paired and PACKET_TYPE_MPRIS in self._capabilities:
+        if self._paired and PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.mpris_request_player_list()
+        if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.send_command_list()
 
     async def close(self) -> None:
         """Close the session; idempotent."""
@@ -435,12 +455,13 @@ class KdePeer:
         self._device_type = body.get("deviceType") or self._device_type
 
         outgoing = body.get("outgoingCapabilities") or []
+        incoming = body.get("incomingCapabilities") or []
         if isinstance(outgoing, list):
-            advertised = {str(item) for item in outgoing}
-            known = set(self._incoming)
-            self._capabilities = advertised & known if advertised else set(self._incoming)
-        elif not self._capabilities:
-            self._capabilities = set(self._incoming)
+            self._receive_capabilities = {str(item) for item in outgoing}
+        if isinstance(incoming, list):
+            self._send_capabilities = {str(item) for item in incoming}
+        if self._send_capabilities or self._receive_capabilities:
+            self._capabilities = self._send_capabilities | self._receive_capabilities
 
     def _verify_peer_certificate(self, writer: asyncio.StreamWriter) -> None:
         """Verify the peer certificate against the pinned/known device id.
@@ -660,9 +681,15 @@ class KdePeer:
         """Ask the device to ring and/or vibrate (find my phone)."""
         await self._send_plugin(make_find_my_phone_packet(ring=ring, vibrate=vibrate))
 
-    async def run_command(self, key: str) -> None:
-        """Run a command the peer advertised in its ``commandList`` (wire key)."""
-        await self._send_plugin(make_run_command_packet(key))
+    async def send_command_list(self) -> None:
+        """Advertise this HA instance's run-command list to the peer."""
+        if not self._connected or not self._paired:
+            return
+        commands = {
+            key: {"name": key, "command": command}
+            for key, command in self._local_commands.items()
+        }
+        await self._send(make_command_list_packet(commands, can_add_command=True))
 
     # ------------------------------------------------------------------ inbound
 
@@ -740,8 +767,8 @@ class KdePeer:
             )
         elif pkt_type == PACKET_TYPE_SMS_MESSAGES:
             self._handle_sms(body)
-        elif pkt_type == PACKET_TYPE_RUNCOMMAND:
-            await self._handle_runcommand(body)
+        elif pkt_type == PACKET_TYPE_RUNCOMMAND_REQUEST:
+            await self._handle_runcommand_request(body)
         elif pkt_type == PACKET_TYPE_RUNCOMMAND_OUTPUT:
             parsed = parse_runcommand(body)
             self._fire(
@@ -782,10 +809,10 @@ class KdePeer:
         self._pair_event.set()
         self.state.notify_changed()
         self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": self._paired})
-        if self._paired and PACKET_TYPE_RUNCOMMAND in self._capabilities:
+        if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
-                await self._send(make_command_list_request_packet())
-        if self._paired and PACKET_TYPE_MPRIS in self._capabilities:
+                await self.send_command_list()
+        if self._paired and PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.mpris_request_player_list()
 
@@ -861,44 +888,67 @@ class KdePeer:
             },
         )
 
-    async def _handle_runcommand(self, body: dict[str, Any]) -> None:
-        command_list = body.get("commandList")
-        if isinstance(command_list, dict):
-            # Peer announces its runnable commands (device side).
-            self.commands = {
-                str(key): {"name": value.get("name"), "command": value.get("command")}
-                for key, value in command_list.items()
-                if isinstance(value, dict)
-            }
-            self.state.notify_changed()
+    async def _handle_runcommand_request(self, body: dict[str, Any]) -> None:
+        """Peer asks HA to re-send its command list or to run a local command."""
+        if body.get("requestCommandList"):
+            await self.send_command_list()
+            return
+        if body.get("setup") or body.get("stop"):
+            _LOGGER.debug("runcommand %r from %s ignored", body, self._device_id)
             return
 
-        # Device asks the desktop to run one of our configured commands.
         key = body.get("key")
         command = self._local_commands.get(key) if isinstance(key, str) else None
-        command_id = body.get("commandId")
         if not self._allow_remote_commands or command is None:
             _LOGGER.debug("remote command %r refused (peer %s)", key, self._device_id)
             return
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        payload = json.dumps(
-            {
-                "id": command_id,
-                "stdout": stdout.decode("utf-8", "replace").splitlines(),
-                "stderr": stderr.decode("utf-8", "replace").splitlines(),
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
+
+        self._command_counter = (self._command_counter + 1) % 2**31
+        command_id = self._command_counter
         try:
-            await self._send_payload_packet(
-                PACKET_TYPE_RUNCOMMAND_OUTPUT, {"id": command_id}, payload
+            await self._send(
+                make_command_output_packet(
+                    command_id=command_id, command=command, started=True
+                )
             )
-        except (HandshakeError, ProtocolError, TimeoutError):
+        except (HandshakeError, ProtocolError, TimeoutError, OSError):
+            _LOGGER.debug("could not announce command start to %s", self._device_id)
+            return
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+        except (OSError, ValueError) as err:
+            _LOGGER.warning("remote command %r failed to start: %s", key, err)
+            await self._send(
+                make_command_output_packet(
+                    command_id=command_id, success=False, exit_code=1, finished=True
+                )
+            )
+            return
+
+        try:
+            await self._send(
+                make_command_output_packet(
+                    command_id=command_id,
+                    stdout=stdout.decode("utf-8", "replace").splitlines(),
+                    stderr=stderr.decode("utf-8", "replace").splitlines(),
+                    output=True,
+                )
+            )
+            await self._send(
+                make_command_output_packet(
+                    command_id=command_id,
+                    success=proc.returncode == 0,
+                    exit_code=int(proc.returncode or 0),
+                    finished=True,
+                )
+            )
+        except (HandshakeError, ProtocolError, TimeoutError, OSError):
             _LOGGER.warning("Could not deliver command output to %s", self._device_id)
 
     # ------------------------------------------------------------------ mpris
@@ -921,9 +971,9 @@ class KdePeer:
             elif self.state.mpris_current_player not in new_players:
                 self.state.mpris_current_player = next(iter(new_players.keys()))
             if self.state.mpris_current_player and self._connected and self._paired:
-                self._hass.async_create_task(
-                    self.mpris_request_player_status(self.state.mpris_current_player)
-                )
+                scheduler = getattr(self._hass, "async_create_task", None)
+                if scheduler is not None:
+                    scheduler(self.mpris_request_player_status(self.state.mpris_current_player))
 
         player = body.get("player")
         if isinstance(player, str) and player:
@@ -964,7 +1014,7 @@ class KdePeer:
     async def mpris_request_player_list(self) -> None:
         if not self._connected or not self._paired:
             return
-        if PACKET_TYPE_MPRIS not in self._capabilities:
+        if PACKET_TYPE_MPRIS_REQUEST not in self.send_capabilities:
             return
         await self._send(build_packet(PACKET_TYPE_MPRIS_REQUEST, {"requestPlayerList": True}))
 

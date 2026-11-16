@@ -47,7 +47,6 @@ from .const import (
     PACKET_TYPE_BATTERY,
     PACKET_TYPE_NOTIFICATION,
     PACKET_TYPE_PING,
-    PACKET_TYPE_RUNCOMMAND,
     PACKET_TYPE_SMS_MESSAGES,
 )
 
@@ -223,29 +222,6 @@ class KdeSmsUnreadEntity(KdeEntityBase, SensorEntity):
         return self._state.sms_unread_count
 
 
-class KdeRemoteCommandsEntity(KdeEntityBase, SensorEntity):
-    """Remote commands advertised by the peer's runcommand plugin."""
-
-    entity_description: SensorEntityDescription
-
-    def __init__(self, peer: KdePeer, state: DeviceState) -> None:
-        """Initialize the remote commands sensor."""
-        super().__init__(peer, state)
-        self.entity_description = REMOTE_COMMANDS_DESCRIPTION
-        self._attr_unique_id = f"{peer.device_id}-remote-commands"
-
-    @property
-    def native_value(self) -> int:
-        """Return number of available remote commands."""
-        return len(getattr(self._peer, "commands", {}) or {})
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose command keys/names for use with kde_connect.run_command."""
-        commands = getattr(self._peer, "commands", {}) or {}
-        return {"commands": commands}
-
-
 class KdePresenceEntity(KdeEntityBase, ScannerEntity):
     """Presence entity: home while the TLS link is open and paired.
 
@@ -311,12 +287,6 @@ SMS_UNREAD_DESCRIPTION = SensorEntityDescription(
     entity_category=EntityCategory.DIAGNOSTIC,
 )
 
-REMOTE_COMMANDS_DESCRIPTION = SensorEntityDescription(
-    key="remote_commands",
-    icon="mdi:console",
-    entity_category=EntityCategory.DIAGNOSTIC,
-)
-
 PRESENCE_DESCRIPTION = ScannerEntityDescription(
     key="presence",
     entity_category=EntityCategory.DIAGNOSTIC,
@@ -354,8 +324,6 @@ def sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[SensorEn
         entities.append(KdeNotificationsReceivedEntity(peer, state))
     if PACKET_TYPE_SMS_MESSAGES in caps:
         entities.append(KdeSmsUnreadEntity(peer, state))
-    if PACKET_TYPE_RUNCOMMAND in caps:
-        entities.append(KdeRemoteCommandsEntity(peer, state))
     return entities
 
 

@@ -9,7 +9,6 @@ from homeassistant.const import Platform
 DOMAIN: Final = "kde_connect"
 PLATFORMS: Final[Platform] = [
     Platform.BINARY_SENSOR,
-    Platform.BUTTON,
     Platform.DEVICE_TRACKER,
     Platform.MEDIA_PLAYER,
     Platform.NOTIFY,
@@ -36,6 +35,7 @@ PACKET_TYPE_SMS_REQUEST: Final = "kdeconnect.sms.request"
 PACKET_TYPE_SMS_MESSAGES: Final = "kdeconnect.sms.messages"
 PACKET_TYPE_RUNCOMMAND: Final = "kdeconnect.runcommand"
 PACKET_TYPE_RUNCOMMAND_OUTPUT: Final = "kdeconnect.runcommand.output"
+PACKET_TYPE_RUNCOMMAND_REQUEST: Final = "kdeconnect.runcommand.request"
 PACKET_TYPE_FIND_MY_PHONE_REQUEST: Final = "kdeconnect.findmyphone.request"
 PACKET_TYPE_MPRIS: Final = "kdeconnect.mpris"
 PACKET_TYPE_MPRIS_REQUEST: Final = "kdeconnect.mpris.request"
@@ -51,7 +51,8 @@ CONF_PEER_CERT: Final = "peer_cert"
 CONF_CAPABILITIES: Final = "capabilities"
 CONF_INBOUND_PORT: Final = "inbound_port"
 CONF_ANNOUNCE: Final = "announce"
-CONF_DISCOVERY_ENABLED: Final = "discovery_enabled"
+CONF_ALLOW_REMOTE_COMMANDS: Final = "allow_remote_commands"
+CONF_LOCAL_COMMANDS: Final = "commands"
 
 EVENT_NOTIFICATION_RECEIVED: Final = "kdeconnect_notification_received"
 EVENT_NOTIFICATION_REQUEST: Final = "kdeconnect_notification_request"

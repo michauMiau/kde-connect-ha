@@ -13,7 +13,7 @@ from homeassistant.components.media_player import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, PACKET_TYPE_MPRIS
+from .const import DOMAIN, PACKET_TYPE_MPRIS_REQUEST
 from .entities import DeviceState, KdeEntityBase
 
 
@@ -32,7 +32,7 @@ class KdeMprisMediaPlayer(KdeEntityBase, MediaPlayerEntity):
         return bool(
             self._peer.connected
             and self._peer.paired
-            and PACKET_TYPE_MPRIS in self._peer.capabilities
+            and PACKET_TYPE_MPRIS_REQUEST in self._peer.send_capabilities
         )
 
     @property
@@ -153,7 +153,7 @@ async def async_setup_entry(
         return False
     entities: list[MediaPlayerEntity] = []
     for device_id, peer in runtime["peers"].items():
-        if PACKET_TYPE_MPRIS in peer.capabilities:
+        if PACKET_TYPE_MPRIS_REQUEST in peer.send_capabilities:
             entities.append(KdeMprisMediaPlayer(peer, runtime["states"][device_id]))
     if entities:
         async_add_entities(entities)

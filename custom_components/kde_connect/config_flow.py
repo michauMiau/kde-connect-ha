@@ -32,6 +32,7 @@ from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
 from homeassistant.setup import async_setup_component
 
 from .const import (
+    CONF_ALLOW_REMOTE_COMMANDS,
     CONF_ANNOUNCE,
     CONF_CAPABILITIES,
     CONF_DEVICE_ID,
@@ -39,6 +40,7 @@ from .const import (
     CONF_DEVICE_TYPE,
     CONF_HOST,
     CONF_INBOUND_PORT,
+    CONF_LOCAL_COMMANDS,
     CONF_PEER_CERT,
     CONF_TCP_PORT,
     DOMAIN,
@@ -430,21 +432,39 @@ class KdeConnectOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage options."""
+        """Manage options: SMS defaults and local run-commands."""
+        errors: dict[str, str] = {}
         if user_input is not None:
             targets = user_input.get("sms_targets") or []
             if isinstance(targets, str):
                 targets = [targets]
+            commands = user_input.get(CONF_LOCAL_COMMANDS) or []
+            if isinstance(commands, str):
+                commands = [commands]
+            commands = [str(line) for line in commands if str(line).strip()]
             return self.async_create_entry(
-                title="", data={"sms_targets": [str(t) for t in targets]}
+                title="",
+                data={
+                    "sms_targets": [str(t) for t in targets],
+                    CONF_ALLOW_REMOTE_COMMANDS: bool(
+                        user_input.get(CONF_ALLOW_REMOTE_COMMANDS, False)
+                    ),
+                    CONF_LOCAL_COMMANDS: commands,
+                },
             )
 
-        current = self._config_entry.options.get("sms_targets", [])
+        options = self._config_entry.options
+        current_targets = options.get("sms_targets", [])
+        current_commands = options.get(CONF_LOCAL_COMMANDS, [])
+        if isinstance(current_commands, str):
+            current_commands = [current_commands]
         schema = {
-            vol.Optional("sms_targets", default=current): TextSelector(
-                # HA 2026.2: free_selection was removed from the text selector;
-                # multiple + multiline render a repeatable text input list.
+            vol.Optional("sms_targets", default=current_targets): TextSelector(
                 TextSelectorConfig(multiple=True, multiline=True)
-            )
+            ),
+            vol.Optional(CONF_ALLOW_REMOTE_COMMANDS, default=bool(options.get(CONF_ALLOW_REMOTE_COMMANDS, False))): bool,
+            vol.Optional(CONF_LOCAL_COMMANDS, default=current_commands): TextSelector(
+                TextSelectorConfig(multiple=True, multiline=True)
+            ),
         }
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema), errors=errors)

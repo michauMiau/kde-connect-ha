@@ -45,12 +45,14 @@ from homeassistant.helpers.storage import Store
 
 from . import protocol
 from .const import (
+    CONF_ALLOW_REMOTE_COMMANDS,
     CONF_CAPABILITIES,
     CONF_DEVICE_ID,
     CONF_DEVICE_NAME,
     CONF_DEVICE_TYPE,
     CONF_HOST,
     CONF_INBOUND_PORT,
+    CONF_LOCAL_COMMANDS,
     CONF_PEER_CERT,
     CONF_TCP_PORT,
     DOMAIN,
@@ -67,7 +69,6 @@ from .const import (
     SERVICE_FIND_MY_PHONE,
     SERVICE_NOTIFICATION_REPLY,
     SERVICE_REQUEST_NOTIFICATIONS,
-    SERVICE_RUN_COMMAND,
     SERVICE_SEND_NOTIFICATION,
     SERVICE_SEND_SMS,
     UDP_PORT,
@@ -100,8 +101,26 @@ SERVICE_CAPABILITIES: dict[str, str] = {
     SERVICE_CANCEL_NOTIFICATION: protocol.CAPABILITY_NOTIFICATION,
     SERVICE_NOTIFICATION_REPLY: protocol.CAPABILITY_NOTIFICATION,
     SERVICE_FIND_MY_PHONE: protocol.CAPABILITY_FIND_MY_PHONE,
-    SERVICE_RUN_COMMAND: protocol.CAPABILITY_RUNCOMMAND,
 }
+
+
+def _parse_local_commands(raw: Any) -> dict[str, str]:
+    """Parse options ``commands`` lines (``key=command``) into a mapping."""
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return {}
+    commands: dict[str, str] = {}
+    for item in raw:
+        line = str(item).strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, command = line.split("=", 1)
+        key = key.strip()
+        command = command.strip()
+        if key and command:
+            commands[key] = command
+    return commands
 
 
 def _target_list(call: ServiceCall, key: str) -> list[str]:
@@ -302,6 +321,7 @@ class KdeConnectManager:
     def _build_peer(self, entry: ConfigEntry) -> KdePeer:
         """Instantiate KdePeer for an entry (verified peer.py signature)."""
         assert self.identity is not None
+        options = entry.options or {}
         return KdePeer(
             self.hass,
             identity=self.identity,
@@ -313,6 +333,8 @@ class KdeConnectManager:
             host=entry.data.get(CONF_HOST),
             tcp_port=entry.data.get(CONF_TCP_PORT, UDP_PORT),
             inbound_port=entry.data.get(CONF_INBOUND_PORT, self.inbound_port),
+            allow_remote_commands=bool(options.get(CONF_ALLOW_REMOTE_COMMANDS, False)),
+            local_commands=_parse_local_commands(options.get(CONF_LOCAL_COMMANDS)),
         )
 
     @staticmethod
@@ -428,7 +450,7 @@ class KdeConnectManager:
     def _announce_unknown_device(
         self, device_id: str, host: str | None, body: dict[str, Any]
     ) -> None:
-        """A TCP identity from an unconfigured device: announce + discovery flow."""
+        """A TCP identity from an unconfigured device: informational event only."""
         try:
             tcp_port = int(body.get("tcpPort") or UDP_PORT)
         except (TypeError, ValueError):
@@ -441,33 +463,6 @@ class KdeConnectManager:
             "protocol_version": int(body.get("protocolVersion") or protocol.PROTOCOL_VERSION),
         }
         self.hass.bus.async_fire(EVENT_DEVICE_DISCOVERED, data)
-        if not host:
-            return
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if entry.unique_id == device_id or entry.data.get(CONF_DEVICE_ID) == device_id:
-                return
-        try:
-            flows = self.hass.config_entries.flow.async_progress_by_handler(DOMAIN)
-        except AttributeError:
-            flows = [
-                f
-                for f in self.hass.config_entries.flow.async_progress()
-                if f.get("handler") == DOMAIN
-            ]
-        if any(f.get("context", {}).get("unique_id") == device_id for f in flows):
-            return
-        try:
-            self.hass.async_create_background_task(
-                self.hass.config_entries.flow.async_init(
-                    DOMAIN,
-                    context={"source": "discovery", "unique_id": device_id},
-                    data=data,
-                ),
-                f"kde_connect_discovery_{device_id}",
-                eager_start=True,
-            )
-        except Exception:
-            _LOGGER.debug("KDE Connect discovery flow init failed", exc_info=True)
 
     # -------------------------------------------------------------- reconnect
     async def _async_reconnect_loop(self, entry_id: str, peer: KdePeer) -> None:
@@ -631,7 +626,7 @@ def _require_ready(manager: KdeConnectManager, peer: KdePeer, service: str) -> N
             "the KDE Connect app on the device to accept the pairing request"
         )
     capability = SERVICE_CAPABILITIES.get(service)
-    if capability is not None and capability not in peer.capabilities:
+    if capability is not None and capability not in peer.send_capabilities:
         raise ServiceValidationError(
             f"KDE Connect device {peer.device_name} does not support "
             f"'{capability}' (required for service kde_connect.{service})"
@@ -741,11 +736,6 @@ def _register_services(hass: HomeAssistant, manager: KdeConnectManager) -> None:
             peer,
         )
 
-    async def run_command(call: ServiceCall) -> None:
-        peer = manager.peer_for_call(call)
-        _require_ready(manager, peer, SERVICE_RUN_COMMAND)
-        await _await_peer(peer.run_command(str(call.data["command"])), peer)
-
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND_NOTIFICATION,
@@ -790,7 +780,4 @@ def _register_services(hass: HomeAssistant, manager: KdeConnectManager) -> None:
         schema=_schema(
             {vol.Required("reply_id"): str, vol.Required("message"): str}
         ),
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_RUN_COMMAND, run_command, schema=_schema({vol.Required("command"): str})
     )
