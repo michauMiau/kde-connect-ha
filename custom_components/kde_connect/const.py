@@ -51,6 +51,7 @@ CONF_PEER_CERT: Final = "peer_cert"
 CONF_CAPABILITIES: Final = "capabilities"
 CONF_INBOUND_PORT: Final = "inbound_port"
 CONF_ANNOUNCE: Final = "announce"
+CONF_DISCOVERY_ENABLED: Final = "discovery_enabled"
 
 EVENT_NOTIFICATION_RECEIVED: Final = "kdeconnect_notification_received"
 EVENT_NOTIFICATION_REQUEST: Final = "kdeconnect_notification_request"

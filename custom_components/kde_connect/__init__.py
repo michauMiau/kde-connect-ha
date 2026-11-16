@@ -213,7 +213,7 @@ class KdeConnectManager:
         """Return the local device name used in discovery packets."""
         return self.identity.device_name if self.identity else LOCAL_DEVICE_NAME
 
-    async def start(self) -> None:
+    async def start(self, discovery_enabled: bool = False) -> None:
         """Set up local identity, inbound port and inbound server, once."""
         if self._stopped:
             return
@@ -231,6 +231,8 @@ class KdeConnectManager:
                     self.inbound_port,
                     exc_info=True,
                 )
+        if self.discovery is not None:
+            await self.discovery.async_start(discovery_enabled=discovery_enabled)
 
     async def stop(self) -> None:
         """Shut down reconnect loops, peers and the inbound server."""
@@ -656,9 +658,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     manager.discovery = discovery
     hass.data[DOMAIN] = {DATA_MANAGER: manager, DATA_DISCOVERY: discovery}
 
-    await manager.start()
+    await manager.start(discovery_enabled=False)
     await manager.async_ensure_local_identity()
-    await discovery.async_start()
 
     async def _on_ha_stop(event: Event) -> None:
         await discovery.async_stop()

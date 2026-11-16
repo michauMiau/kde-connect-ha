@@ -1,16 +1,9 @@
 """UDP discovery (announce) for KDE Connect peers.
 
-KDE Connect devices announce themselves over UDP port 1716: every device on
-the LAN periodically broadcasts a ``kdeconnect.identity`` packet and replies
-to our own broadcast with its identity. This module:
-
-- broadcasts our HA identity (stable local deviceId) every
-  ``DISCOVERY_INTERVAL`` seconds, so devices can discover Home Assistant;
-- listens on UDP 1716 for device identity packets;
-- fires ``EVENT_DEVICE_DISCOVERED`` and starts a discovery config flow for
-  devices we have not configured yet (per-device rate limit);
-- offers ``async_probe`` for the config flow: send an identity packet to a
-  specific host and wait for its reply (device id + tcp port).
+By default this integration does NOT broadcast or sweep the network. The UDP
+listener binds port 1716 so manual probes from config flow can discover devices.
+Identity packets heard passively fire ``EVENT_DEVICE_DISCOVERED`` (informational)
+but never auto-start config flows.
 """
 
 from __future__ import annotations
@@ -22,10 +15,6 @@ from typing import Any
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
-    CONF_DEVICE_ID,
-    DISCOVERY_INTERVAL,
-    DISCOVERY_SWEEP_INTERVAL,
-    DOMAIN,
     EVENT_DEVICE_DISCOVERED,
     PACKET_TYPE_IDENTITY,
     PROTOCOL_VERSION,
@@ -34,33 +23,27 @@ from .const import (
 from .protocol import (
     decode_packet,
     encode_packet,
-    local_ipv4,
     make_udp_discovery_packet,
     valid_device_id,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# Minimum seconds between discovery events / flow starts for the same device.
 _RATE_LIMIT = 15.0
 
 
 class KdeConnectDiscovery:
-    """UDP announce broadcaster + identity listener."""
+    """UDP listener (+ optional manual probe helpers)."""
 
     def __init__(self, hass: HomeAssistant, manager: Any) -> None:
-        """Store the manager (identity source) and initialize state."""
         self._hass = hass
         self._manager = manager
         self._transport: asyncio.DatagramTransport | None = None
-        self._broadcast_task: asyncio.Task[None] | None = None
-        self._sweep_task: asyncio.Task[None] | None = None
         self._last_seen: dict[str, float] = {}
         self._pending_probes: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._started = False
 
     async def async_start(self) -> None:
-        """Bind the UDP listener and start the announce broadcast loop."""
         if self._started:
             return
         self._started = True
@@ -82,22 +65,9 @@ class KdeConnectDiscovery:
 
         self._transport = transport
         _LOGGER.info("KDE Connect UDP discovery listener bound on port %s", UDP_PORT)
-        self._broadcast_task = self._hass.async_create_background_task(
-            self._async_broadcast_loop(), "kde_connect_announce", eager_start=True
-        )
-        self._sweep_task = self._hass.async_create_background_task(
-            self._async_sweep_loop(), "kde_connect_sweep", eager_start=True
-        )
 
     async def async_stop(self) -> None:
-        """Stop broadcasting and close the UDP socket."""
         self._started = False
-        if self._broadcast_task is not None:
-            self._broadcast_task.cancel()
-            self._broadcast_task = None
-        if self._sweep_task is not None:
-            self._sweep_task.cancel()
-            self._sweep_task = None
         if self._transport is not None:
             self._transport.close()
             self._transport = None
@@ -107,7 +77,6 @@ class KdeConnectDiscovery:
         self._pending_probes.clear()
 
     def _announce_packet(self) -> bytes | None:
-        """Serialized identity packet for our local identity."""
         device_id = self._manager.local_device_id
         if not device_id:
             return None
@@ -118,58 +87,16 @@ class KdeConnectDiscovery:
         )
         return encode_packet(packet)
 
-    async def _async_broadcast_loop(self) -> None:
-        """Broadcast our identity periodically until stopped."""
-        while self._started and self._transport is not None:
-            packet = self._announce_packet()
-            if packet is not None:
-                try:
-                    self._transport.sendto(packet, ("255.255.255.255", UDP_PORT))
-                except OSError:
-                    _LOGGER.debug("KDE Connect UDP broadcast failed", exc_info=True)
-            await asyncio.sleep(DISCOVERY_INTERVAL)
-
-    async def _async_sweep_loop(self) -> None:
-        """Unicast-identity probe across the local /24, NAT-safe discovery.
-
-        Broadcast frames do not cross Docker's NAT bridge, so devices outside
-        the container network never receive the announce. Unicast probes to the
-        subnet addresses of the outbound route reach KDE devices directly.
-        """
-        while self._started and self._transport is not None:
-            packet = self._announce_packet()
-            if packet is not None:
-                local = local_ipv4()
-                if local.count(".") == 3:
-                    prefix = local.rsplit(".", 1)[0]
-                    _LOGGER.debug(
-                        "KDE Connect UDP sweep on %s.1-254 from %s",
-                        prefix,
-                        local,
-                    )
-                    for last in range(1, 255):
-                        target = f"{prefix}.{last}"
-                        if target == local:
-                            continue
-                        try:
-                            self._transport.sendto(packet, (target, UDP_PORT))
-                        except OSError:
-                            _LOGGER.debug("KDE Connect UDP sweep to %s failed", target)
-            await asyncio.sleep(DISCOVERY_SWEEP_INTERVAL)
-
-    # ------------------------------------------------------------------ socket
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:  # type: ignore[override]
-        """Asyncio protocol hook: socket bound."""
         self._transport = transport
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Asyncio protocol hook: socket closed."""
+        pass
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Asyncio protocol hook: dispatch identity packets."""
         try:
             packet = decode_packet(data)
-        except Exception:  # noqa: BLE001 - ignore malformed UDP frames
+        except Exception:  # noqa: BLE001
             return
         if packet.get("type") != PACKET_TYPE_IDENTITY:
             return
@@ -183,10 +110,7 @@ class KdeConnectDiscovery:
         self._async_handle_identity(str(device_id), str(addr[0]), body)
 
     @callback
-    def _async_handle_identity(
-        self, device_id: str, host: str, body: dict[str, Any]
-    ) -> None:
-        """A device identity arrived: answer pending probes or announce."""
+    def _async_handle_identity(self, device_id: str, host: str, body: dict[str, Any]) -> None:
         future = self._pending_probes.pop(host, None)
         if future is None and self._pending_probes:
             future = self._pending_probes.pop(next(iter(self._pending_probes)))
@@ -215,58 +139,7 @@ class KdeConnectDiscovery:
         }
         self._hass.bus.async_fire(EVENT_DEVICE_DISCOVERED, data)
 
-        # A UDP reply from a device we have not configured -> discovery flow.
-        if not self._device_known_or_flow_in_progress(device_id):
-            self._hass.async_create_background_task(
-                self._async_start_discovery_flow(data),
-                f"kde_connect_discovery_{device_id}",
-                eager_start=True,
-            )
-
-    def _device_known_or_flow_in_progress(self, device_id: str) -> bool:
-        """Return True if device is configured or its config flow is active."""
-        for entry in self._hass.config_entries.async_entries(DOMAIN):
-            if entry.unique_id == device_id or entry.data.get(CONF_DEVICE_ID) == device_id:
-                return True
-        try:
-            flows = self._hass.config_entries.flow.async_progress_by_handler(DOMAIN)
-        except AttributeError:
-            flows = [
-                f
-                for f in self._hass.config_entries.flow.async_progress()
-                if f.get("handler") == DOMAIN
-            ]
-        return any(f.get("context", {}).get("unique_id") == device_id for f in flows)
-
-    async def _async_start_discovery_flow(self, data: dict[str, Any]) -> None:
-        """Kick off a discovery config flow for an unknown device."""
-        device_id = data.get("device_id")
-        if not device_id:
-            return
-        for entry in self._hass.config_entries.async_entries(DOMAIN):
-            if entry.unique_id == device_id or entry.data.get(CONF_DEVICE_ID) == device_id:
-                return
-        try:
-            flows = self._hass.config_entries.flow.async_progress_by_handler(DOMAIN)
-        except AttributeError:
-            flows = [
-                f
-                for f in self._hass.config_entries.flow.async_progress()
-                if f.get("handler") == DOMAIN
-            ]
-        if any(f.get("context", {}).get("unique_id") == device_id for f in flows):
-            return
-        try:
-            await self._hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "discovery", "unique_id": device_id},
-                data=data,
-            )
-        except Exception:
-            _LOGGER.info("KDE Connect discovery flow init failed", exc_info=True)
-
     async def async_probe(self, host: str, timeout: float) -> dict[str, Any] | None:
-        """Send an identity packet to ``host`` and wait for its identity reply."""
         if self._transport is None:
             return None
         packet = self._announce_packet()
@@ -282,9 +155,59 @@ class KdeConnectDiscovery:
         finally:
             self._pending_probes.pop(host, None)
 
+    async def async_probe_subnet(self, timeout: float = 3.0) -> list[dict[str, Any]]:
+        """One-shot unicast probe of local /24 (manual scan). Returns discovered devices."""
+        if self._transport is None:
+            return []
+        packet = self._announce_packet()
+        if packet is None:
+            return []
+        from .protocol import local_ipv4
+
+        local = local_ipv4()
+        if local.count(".") != 3:
+            return []
+        prefix = local.rsplit(".", 1)[0]
+        results: dict[str, dict[str, Any]] = {}
+
+        async def _wait_for(host: str) -> None:
+            if host in self._pending_probes:
+                return
+            fut: asyncio.Future[dict[str, Any]] = self._hass.loop.create_future()
+            self._pending_probes[host] = fut
+            try:
+                res = await asyncio.wait_for(fut, timeout=timeout)
+                results[str(res["device_id"])] = {
+                    "device_id": res["device_id"],
+                    "device_name": res.get("device_name") or "",
+                    "host": host,
+                    "tcp_port": int(res.get("tcp_port") or UDP_PORT),
+                    "protocol_version": int(res.get("protocol_version") or PROTOCOL_VERSION),
+                }
+            except (TimeoutError, asyncio.CancelledError, OSError):
+                pass
+            finally:
+                self._pending_probes.pop(host, None)
+
+        waiters = [asyncio.create_task(_wait_for(f"{prefix}.{i}")) for i in range(1, 255) if f"{prefix}.{i}" != local]
+        await asyncio.sleep(0.1)
+        for i in range(1, 255):
+            target = f"{prefix}.{i}"
+            if target == local:
+                continue
+            try:
+                self._transport.sendto(packet, (target, UDP_PORT))
+            except OSError:
+                continue
+        for w in waiters:
+            try:
+                await w
+            except (asyncio.CancelledError, Exception):
+                _LOGGER.debug("KDE Connect probe waiter ended", exc_info=True)
+        return list(results.values())
+
 
 def _tcp_port(value: Any) -> int:
-    """UDP ``tcpPort`` is a string on the wire; tolerate ints."""
     try:
         return int(value) if value is not None else UDP_PORT
     except (TypeError, ValueError):

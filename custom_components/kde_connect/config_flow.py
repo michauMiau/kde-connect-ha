@@ -230,62 +230,124 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask host (+ optional TCP port), then handshake."""
-        if user_input is None:
-            return self.async_show_form(step_id="user", data_schema=_USER_SCHEMA)
+        """Manual setup: scan the local /24 (once) or enter host manually."""
+        manager = self._manager()
+        if manager is None:
+            with contextlib.suppress(Exception):
+                await async_setup_component(self.hass, DOMAIN, {})
+            manager = self._manager()
+        if manager is None:
+            return self.async_abort(reason="cannot_connect")
 
-        host = str(user_input[CONF_HOST]).strip()
-        port = int(user_input.get(CONF_TCP_PORT) or UDP_PORT)
-        if not MIN_TCP_PORT <= port <= MAX_TCP_PORT:
-            return self.async_show_form(
-                step_id="user",
-                data_schema=_USER_SCHEMA,
-                errors={CONF_TCP_PORT: "invalid_port"},
-            )
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, str] = {}
+        discovery = getattr(manager, "discovery", None)
+        found = getattr(self, "_scan_results", None)
+        if found is None:
+            self._scan_results = []
+            found = self._scan_results
 
-        if not await self._async_handshake(host, port):
-            return self.async_show_form(
-                step_id="user",
-                data_schema=_USER_SCHEMA,
-                errors={CONF_HOST: "cannot_connect"},
+        if user_input is not None:
+            action = str(user_input.get("action") or "manual")
+            if action == "scan":
+                if discovery is None:
+                    errors["base"] = "cannot_connect"
+                else:
+                    found.clear()
+                    try:
+                        results = await discovery.async_probe_subnet(timeout=3.0)
+                    except Exception:
+                        _LOGGER.exception("KDE Connect subnet scan failed")
+                        results = []
+                    # dedupe by device_id
+                    seen: set[str] = set()
+                    for r in results:
+                        did = str(r.get("device_id") or "")
+                        if not did or did in seen:
+                            continue
+                        seen.add(did)
+                        found.append(r)
+                    if not found:
+                        errors["base"] = "no_devices_found"
+                    else:
+                        description_placeholders["found"] = "\n".join(
+                            f"- {r.get('device_name') or '(unnamed)'} ({r.get('device_id')}) @ {r.get('host')}:{r.get('tcp_port')}"
+                            for r in found
+                        )
+            elif action == "manual":
+                host = str(user_input.get("host") or "").strip()
+                port = int(user_input.get("tcp_port") or UDP_PORT)
+                if not host:
+                    errors["host"] = "cannot_connect"
+                elif not MIN_TCP_PORT <= port <= MAX_TCP_PORT:
+                    errors["tcp_port"] = "invalid_port"
+                else:
+                    if not await self._async_handshake(host, port):
+                        errors["host"] = "cannot_connect"
+                    else:
+                        return await self._async_finish_or_pair()
+            elif action == "select":
+                selected = str(user_input.get("device") or "")
+                match = next((r for r in found if r.get("device_id") == selected), None)
+                if not match:
+                    errors["device"] = "cannot_connect"
+                else:
+                    host = str(match.get("host") or "")
+                    port = int(match.get("tcp_port") or UDP_PORT)
+                    device_name = str(match.get("device_name") or "") or None
+                    device_id = str(match.get("device_id") or "") or None
+                    if not await self._async_handshake(host, port, device_id, device_name):
+                        errors["base"] = "cannot_connect"
+                    else:
+                        return await self._async_finish_or_pair()
+
+        if found:
+            device_options = [
+                f"{r.get('device_name') or '(unnamed)'} @ {r.get('host')} — {r.get('device_id')}"
+                for r in found
+            ]
+            # store mapping separately
+            self._scan_device_ids = [str(r.get("device_id")) for r in found]
+            schema = vol.Schema(
+                {
+                    vol.Required("action", default="select"): vol.In(
+                        {"select": "Use a discovered device", "scan": "Scan again", "manual": "Enter host manually"}
+                    ),
+                    vol.Optional("device"): vol.In(dict(zip(self._scan_device_ids, device_options))),
+                    vol.Optional(CONF_HOST): str,
+                    vol.Optional(CONF_TCP_PORT, default=UDP_PORT): int,
+                }
             )
-        return await self._async_finish_or_pair()
+            description_placeholders["found"] = "\n".join(
+                f"- {r.get('device_name') or '(unnamed)'} ({r.get('device_id')}) @ {r.get('host')}:{r.get('tcp_port')}"
+                for r in found
+            )
+        else:
+            schema = vol.Schema(
+                {
+                    vol.Required("action", default="scan"): vol.In(
+                        {"scan": "Scan local network (one-time)", "manual": "Enter host manually"}
+                    ),
+                    vol.Optional(CONF_HOST): str,
+                    vol.Optional(CONF_TCP_PORT, default=UDP_PORT): int,
+                }
+            )
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )
 
     async def async_step_discovery(
         self, discovery_info: dict[str, Any]
     ) -> ConfigFlowResult:
-        """Handle a device found by the UDP discovery listener (discovery.py).
+        """Handle a device discovered via UDP (informational only).
 
-        discovery.py hands us its event payload keys: device_id, host,
-        device_name, tcp_port, protocol_version.
+        We never auto-start flows from background sweeps; discovery events are
+        shown to the user in the manual scan step instead.
         """
-        device_id = str(discovery_info.get(CONF_DEVICE_ID) or "")
-        host = str(discovery_info.get(CONF_HOST) or "")
-        if not device_id or not host or not valid_device_id(device_id):
-            return self.async_abort(reason="cannot_connect")
-
-        self._device_id = device_id
-        self._host = host
-        try:
-            self._tcp_port = int(discovery_info.get(CONF_TCP_PORT) or UDP_PORT)
-        except (TypeError, ValueError):
-            self._tcp_port = UDP_PORT
-        self._device_name = str(discovery_info.get(CONF_DEVICE_NAME) or "") or None
-
-        try:
-            await self.async_set_unique_id(device_id)
-            self._abort_if_unique_id_configured(
-                updates={CONF_HOST: host, CONF_TCP_PORT: self._tcp_port}
-            )
-        except AbortFlow:
-            if self._peer is not None:
-                await self._close_peer(self._peer)
-                self._peer = None
-            raise
-
-        if not await self._async_handshake(host, self._tcp_port, device_id, self._device_name):
-            return self.async_abort(reason="cannot_connect")
-        return await self._async_finish_or_pair()
+        return self.async_abort(reason="not_implemented")
 
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
