@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Add KDE Connect device",
-        "description": "Choose a one-time scan of your local network (no background broadcasting), or enter the device IP/hostname manually. Scan shows found devices (name, ID, IP) so you can pick deliberately.",
+        "description": "Choose a one-time scan of your local network (no background broadcasting), or enter the device IP/hostname manually. Scan shows found devices (name, ID, IP) so you can pick deliberately.\n\n{found}",
         "data": {
           "action": "Action",
           "device": "Discovered device",
@@ -29,6 +29,7 @@
     "error": {
       "cannot_connect": "Could not connect to the device.",
       "invalid_port": "Invalid TCP port: must be between 1716 and 1764.",
+      "pairing_timeout": "Pairing was not confirmed by the device yet. Approve it in KDE Connect and try again.",
       "no_devices_found": "No KDE Connect devices were found on the local network during the scan."
     }
   },
