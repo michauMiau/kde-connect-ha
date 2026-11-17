@@ -12,7 +12,7 @@ Also check out [KOSPEL PPE4 for Home Assistant](https://github.com/michauMiau/pp
 - **Sensors**: battery charge, charging state, battery quantity; device availability
 - **Media player**: MPRIS remote control of the device's active player (play/pause/next/previous/seek/volume/source)
 - **Run commands**: HA acts as the desktop side — define `key=command` lines in the entry options, enable execution, and trigger them from KDE Connect on the device
-- **Services**: send notification, cancel notification, request notifications, notification reply, SMS, find-my-phone, pair, unpair
+- **Services**: send notification, cancel notification, request notifications, notification reply, SMS, find-my-phone, ping, pair, accept_pair, unpair
 - **Events**: device discovered, pair request, battery change, ping, notifications, SMS, command output
 
 ## Installation
@@ -50,6 +50,11 @@ If a device shows as unavailable, pairing is not confirmed. Call the
 `kde_connect.pair` service (target the device) and accept the request in KDE
 Connect on the device; `kde_connect.unpair` tears it down. Pairing state is
 stored on the entry, so reloads keep entities available.
+
+Device-initiated pairing requests are auto-accepted by default. Disable
+*Automatically accept pairing requests from the device* in the entry options to
+require approval through `kde_connect.accept_pair` (a repair issue names the
+requesting device).
 
 ## Development
 

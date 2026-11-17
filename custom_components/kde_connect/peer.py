@@ -27,7 +27,7 @@ CN check — see ``protocol.client_tls_context`` / ``peer_certificate``.
 
 Entity-facing duck type (consumed by ``entities.py``): ``device_id`` /
 ``device_name`` / ``device_type`` describe the *remote peer*,
-``capabilities`` is the set of packet types the peer can push to us, and
+``capabilities`` is the union of advertised packet types, and
 ``connected`` / ``paired`` drive entity availability. Push packets update
 ``self.state`` (``DeviceState``) and call ``notify_changed()``, so sensor
 entities refresh immediately.
@@ -42,6 +42,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import signal
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -69,6 +71,7 @@ from .const import (
     PACKET_TYPE_NOTIFICATION_REQUEST,
     PACKET_TYPE_PAIR,
     PACKET_TYPE_PING,
+    PACKET_TYPE_RUNCOMMAND,
     PACKET_TYPE_RUNCOMMAND_OUTPUT,
     PACKET_TYPE_RUNCOMMAND_REQUEST,
     PACKET_TYPE_SMS_MESSAGES,
@@ -98,6 +101,7 @@ from .protocol import (
     load_certificate,
     make_command_list_packet,
     make_command_output_packet,
+    make_command_request_packet,
     make_connection_packet,
     make_encrypted_identity,
     make_find_my_phone_packet,
@@ -153,6 +157,7 @@ class KdePeer:
         local_commands: dict[str, str] | None = None,
         inbound_port: int | None = None,
         peer_paired: bool | None = None,
+        auto_accept_pairing: bool = True,
     ) -> None:
         """Initialize a live session with one remote peer device."""
         self._hass = hass
@@ -170,6 +175,7 @@ class KdePeer:
         self._inbound_port = inbound_port
         self._host = host
         self._tcp_port = tcp_port
+        self._auto_accept_pairing = auto_accept_pairing
 
         self.state = DeviceState()
         self._command_counter = 0
@@ -182,10 +188,14 @@ class KdePeer:
         self._paired = bool(peer_paired)
         self._paired_known = peer_paired is not None
         self._pair_rejected = False
+        self._peer_addr: str | None = None
+        self._session_lock = asyncio.Lock()
+        self._command_tasks: set[asyncio.Task[None]] = set()
+        self._command_procs: set[asyncio.subprocess.Process] = set()
 
         self._pair_event = asyncio.Event()
-        self._ping_event = asyncio.Event()
-        self._ping_started: float | None = None
+        self._pair_probe_event = asyncio.Event()
+        self._pending_pair_request: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ entity view
 
@@ -214,7 +224,7 @@ class KdePeer:
     @property
     def send_capabilities(self) -> set[str]:
         """Packet types the peer can receive (HA -> peer direction)."""
-        return self._send_capabilities or self._capabilities
+        return self._send_capabilities
 
     @property
     def receive_capabilities(self) -> set[str]:
@@ -244,8 +254,13 @@ class KdePeer:
         port = tcp_port or self._tcp_port or UDP_PORT
         if not host:
             raise HandshakeError("peer host is not configured")
-        await self.close()
+        async with self._session_lock:
+            await self._close_transport()
+            self._peer_addr = host
+            await self._connect_locked(host, port)
 
+    async def _connect_locked(self, host: str, port: int) -> None:
+        """Establish the outbound session (caller holds ``_session_lock``)."""
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port, limit=MAX_LINE_BYTES),
@@ -316,7 +331,7 @@ class KdePeer:
         if self._paired and PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.mpris_request_player_list()
-        if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
+        if self._paired and PACKET_TYPE_RUNCOMMAND in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.send_command_list()
         if not self._paired_known:
@@ -325,26 +340,68 @@ class KdePeer:
                 scheduler(self._detect_paired())
 
     async def _detect_paired(self) -> None:
-        """Legacy entries: infer pairing when the peer does not reject us.
+        """Legacy entries: infer pairing from a paired-only probe.
 
-        An unpaired KDE Connect device answers a paired-only packet with
-        ``kdeconnect.pair {pair: false}``; a paired one stays silent (or
-        answers the request). Wait a moment, then assume paired.
+        Send a ``kdeconnect.runcommand.request``; an unpaired peer answers with
+        ``kdeconnect.pair {pair: false}`` (or ignores it and stays silent), a
+        paired peer answers with plugin data. Mark paired only on a positive
+        response, otherwise leave the peer unpaired.
         """
-        await asyncio.sleep(2.0)
-        if not self._connected or self._paired or self._pair_rejected:
+        if self._paired or not self._connected or self._pending_pair_request:
+            return
+        self._pair_probe_event.clear()
+        probes: list[dict[str, Any]] = []
+        if PACKET_TYPE_RUNCOMMAND_REQUEST in self.capabilities:
+            probes.append(make_command_request_packet({"requestCommandList": True}))
+        if PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
+            probes.append(
+                build_packet(PACKET_TYPE_MPRIS_REQUEST, {"requestPlayerList": True})
+            )
+        if not probes:
+            return
+        try:
+            for probe in probes:
+                await self._send(probe)
+        except (HandshakeError, ProtocolError, TimeoutError, OSError) as err:
+            _LOGGER.debug("pairing probe to %s failed: %s", self._device_id, err)
+            return
+        try:
+            await asyncio.wait_for(self._pair_probe_event.wait(), timeout=2.5)
+        except TimeoutError:
+            _LOGGER.debug(
+                "KDE Connect peer %s did not confirm pairing", self._device_id
+            )
+            return
+        if self._pair_rejected or not self._connected:
             return
         self._paired = True
         self._paired_known = True
         self.state.notify_changed()
-        _LOGGER.info(
-            "KDE Connect peer %s accepted the session as paired", self._device_id
-        )
+        _LOGGER.info("KDE Connect peer %s confirmed as paired", self._device_id)
         self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": True})
+        await self._refresh_plugin_state()
+
+    async def _refresh_plugin_state(self) -> None:
+        """Ask the peer for run-command list and MPRIS player list."""
+        if not self._paired:
+            return
+        if PACKET_TYPE_RUNCOMMAND in self.send_capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.send_command_list()
+        if PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
+            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
+                await self.mpris_request_player_list()
 
     async def serve(self, reader, writer, tcp_port: int | None = None) -> None:
         """Accept an inbound session started by asyncio.start_server."""
-        await self.close()
+        async with self._session_lock:
+            await self._close_transport()
+            peername = writer.transport.get_extra_info("peername")
+            self._peer_addr = peername[0] if peername else None
+            await self._serve_locked(reader, writer, tcp_port)
+
+    async def _serve_locked(self, reader, writer, tcp_port: int | None) -> None:
+        """Run the inbound handshake (caller holds ``_session_lock``)."""
         self._reader = reader
         self._writer = writer
         self._closing = False
@@ -419,7 +476,7 @@ class KdePeer:
         if self._paired and PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.mpris_request_player_list()
-        if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
+        if self._paired and PACKET_TYPE_RUNCOMMAND in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.send_command_list()
         if not self._paired_known:
@@ -428,23 +485,38 @@ class KdePeer:
                 scheduler(self._detect_paired())
 
     async def close(self) -> None:
-        """Close the session; idempotent."""
+        """Close the session; idempotent. Pairing state is preserved."""
+        async with self._session_lock:
+            await self._close_transport()
+
+    stop = close
+
+    async def _close_transport(self) -> None:
+        """Tear down the transport and child processes (lock held)."""
         self._closing = True
         task, self._loop_task = self._loop_task, None
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         writer, self._writer = self._writer, None
         self._reader = None
         if writer is not None:
             writer.close()
             with contextlib.suppress(OSError, asyncio.InvalidStateError):
                 await writer.wait_closed()
+        for proc in list(self._command_procs):
+            self._terminate_process(proc)
+        for task in list(self._command_tasks):
+            if not task.done():
+                task.cancel()
+        if self._command_tasks:
+            await asyncio.gather(*self._command_tasks, return_exceptions=True)
+        self._command_tasks.clear()
+        self._command_procs.clear()
         if self._connected:
             self._connected = False
-            self._paired = False
             self.state.notify_changed()
-
-    stop = close
 
     # ------------------------------------------------------------------ identity
 
@@ -527,18 +599,38 @@ class KdePeer:
             raise ProtocolError(f"peer {self._device_id} is not paired")
         await self._send(packet)
 
+    @staticmethod
+    def _terminate_process(proc: asyncio.subprocess.Process) -> None:
+        """Terminate a command process group (best effort)."""
+        if proc.returncode is not None:
+            return
+        with contextlib.suppress(OSError, ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            return
+        with contextlib.suppress(OSError, ProcessLookupError):
+            proc.terminate()
+
     async def _fetch_payload(self, packet: dict[str, Any]) -> bytes | None:
         """Download payload bytes from the announced payloadTransferInfo."""
         info = packet.get("payloadTransferInfo")
         size = packet.get("payloadSize")
         if not info or not size:
             return None
-        ip = info.get("ip")
+        ip = str(info.get("ip"))
         port = info.get("port")
-        if not ip or port is None:
-            raise ProtocolError("payloadTransferInfo missing ip/port")
+        if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+            raise ProtocolError("payloadTransferInfo has an invalid port")
+        # Only accept the established peer's address (prevents SSRF to other
+        # hosts on the LAN); loopback is allowed when the peer itself is local.
+        local_peer = self._peer_addr in ("127.0.0.1", "::1")
+        if self._peer_addr and ip != self._peer_addr and not (local_peer and ip in ("127.0.0.1", "::1")):
+            raise ProtocolError(
+                f"payload transfer host {ip!r} does not match peer {self._peer_addr!r}"
+            )
+        if size > MAX_PAYLOAD_BYTES:
+            raise ProtocolError("payload exceeds size limit")
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(str(ip), int(port), limit=MAX_LINE_BYTES),
+            asyncio.open_connection(ip, port, limit=MAX_LINE_BYTES),
             timeout=HANDSHAKE_TIMEOUT,
         )
         try:
@@ -556,13 +648,15 @@ class KdePeer:
                 server_side=True,
             )
             peer_certificate(writer, self._device_id)
-            data = await asyncio.wait_for(reader.read(MAX_PAYLOAD_BYTES + 1), timeout=HANDSHAKE_TIMEOUT)
+            data = await asyncio.wait_for(
+                reader.readexactly(size), timeout=HANDSHAKE_TIMEOUT
+            )
+        except asyncio.IncompleteReadError as err:
+            raise ProtocolError("payload transfer truncated") from err
         finally:
             writer.close()
             with contextlib.suppress(OSError, asyncio.InvalidStateError):
                 await writer.wait_closed()
-        if len(data) > MAX_PAYLOAD_BYTES:
-            raise ProtocolError("payload exceeds size limit")
         return data
 
     async def _send_payload_packet(
@@ -640,18 +734,11 @@ class KdePeer:
         self.state.notify_changed()
         self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": False})
 
-    async def ping(self) -> float | None:
-        """Send a ping packet and return round-trip latency in ms, or None."""
+    async def ping(self) -> None:
+        """Send a ping packet to the device (one-way; no round-trip reply)."""
         if not self._connected:
             raise HandshakeError("peer session is not connected")
-        self._ping_event.clear()
-        self._ping_started = time.monotonic()
         await self._send(make_ping_packet())
-        try:
-            await asyncio.wait_for(self._ping_event.wait(), timeout=HANDSHAKE_TIMEOUT)
-        except TimeoutError:
-            return None
-        return self.state.ping_latency_ms
 
     async def send_notification(
         self,
@@ -729,7 +816,11 @@ class KdePeer:
         """Read framed packets until the peer closes the session."""
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await reader.readline()
+                except (asyncio.LimitOverrunError, ValueError, OSError):
+                    _LOGGER.debug("session read error with peer %s", self._device_id)
+                    break
                 if not line:
                     break
                 try:
@@ -737,7 +828,18 @@ class KdePeer:
                 except ProtocolError:
                     _LOGGER.debug("malformed packet from %s: %r", self._device_id, line[:120])
                     continue
-                await self._dispatch(packet)
+                try:
+                    await self._dispatch(packet)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # One bad plugin packet must not tear down the session.
+                    _LOGGER.debug(
+                        "error handling %r from %s",
+                        packet.get("type"),
+                        self._device_id,
+                        exc_info=True,
+                    )
         except asyncio.CancelledError:
             return
         except (OSError, ConnectionResetError):
@@ -746,7 +848,6 @@ class KdePeer:
             if not self._closing:
                 self._closing = True
                 self._connected = False
-                self._paired = False
                 self.state.notify_changed()
                 _LOGGER.info("Peer %s disconnected", self._device_id)
 
@@ -765,6 +866,10 @@ class KdePeer:
                     body.update(extra)
 
         self.state.last_seen = datetime.now(UTC)
+        if pkt_type in (PACKET_TYPE_RUNCOMMAND, PACKET_TYPE_MPRIS):
+            # Correlated answer to the legacy pairing probe (command list or
+            # MPRIS player list); unrelated packets do not prove pairing.
+            self._pair_probe_event.set()
 
         if pkt_type == PACKET_TYPE_IDENTITY:
             self._consume_peer_identity(packet)
@@ -801,6 +906,11 @@ class KdePeer:
             self._handle_sms(body)
         elif pkt_type == PACKET_TYPE_RUNCOMMAND_REQUEST:
             await self._handle_runcommand_request(body)
+        elif pkt_type == PACKET_TYPE_RUNCOMMAND:
+            # Desktop peers (kdeconnect-kde) request execution on the base
+            # packet type; Android uses kdeconnect.runcommand.request.
+            if body.get("key"):
+                await self._handle_runcommand_request(body)
         elif pkt_type == PACKET_TYPE_RUNCOMMAND_OUTPUT:
             parsed = parse_runcommand(body)
             self._fire(
@@ -832,8 +942,14 @@ class KdePeer:
             self._pair_rejected = True
         requested = pair and body.get("timestamp") is not None
         if requested:
-            # Peer initiated a pairing request — accept (config flow gates it).
+            self._pending_pair_request = dict(body)
             self._fire(EVENT_PAIR_REQUEST, {"device_id": self._device_id})
+            if not self._auto_accept_pairing:
+                _LOGGER.info(
+                    "KDE Connect pairing request from %s awaits approval",
+                    self._device_id,
+                )
+                return
             await self._send(make_pair_accept())
             self._paired = True
         elif pair:
@@ -843,12 +959,24 @@ class KdePeer:
         self._pair_event.set()
         self.state.notify_changed()
         self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": self._paired})
-        if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
-            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
-                await self.send_command_list()
-        if self._paired and PACKET_TYPE_MPRIS_REQUEST in self.send_capabilities:
-            with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
-                await self.mpris_request_player_list()
+        if self._paired:
+            await self._refresh_plugin_state()
+
+    async def accept_pair(self) -> bool:
+        """Approve the pending peer-initiated pairing request."""
+        if not self._connected:
+            raise HandshakeError("peer session is not connected")
+        if self._paired:
+            return True
+        await self._send(make_pair_accept())
+        self._paired = True
+        self._paired_known = True
+        self._pending_pair_request = None
+        self._pair_event.set()
+        self.state.notify_changed()
+        self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": True})
+        await self._refresh_plugin_state()
+        return True
 
     def _handle_battery(self, body: dict[str, Any]) -> None:
         parsed = parse_battery(body)
@@ -858,15 +986,9 @@ class KdePeer:
         self.state.notify_changed()
 
     async def _handle_ping(self) -> None:
-        # KDE Connect pings are echoed back verbatim.
-        await self._send(make_ping_packet())
-        if self._ping_started is not None:
-            self.state.ping_latency_ms = round(
-                (time.monotonic() - self._ping_started) * 1000, 1
-            )
-            self._ping_started = None
-            self._ping_event.set()
-            self.state.notify_changed()
+        # KDE Connect pings are one-way: the receiver shows a notification and
+        # does not echo. Do not answer, just record activity.
+        self.state.notify_changed()
 
     def _handle_notification(self, body: dict[str, Any]) -> None:
         parsed = parse_notification(body)
@@ -924,6 +1046,11 @@ class KdePeer:
 
     async def _handle_runcommand_request(self, body: dict[str, Any]) -> None:
         """Peer asks HA to re-send its command list or to run a local command."""
+        if not self._paired:
+            _LOGGER.debug("refusing runcommand from unpaired peer %s", self._device_id)
+            return
+        if PACKET_TYPE_RUNCOMMAND_REQUEST not in self.capabilities:
+            return
         if body.get("requestCommandList"):
             await self.send_command_list()
             return
@@ -932,13 +1059,24 @@ class KdePeer:
             return
 
         key = body.get("key")
-        command = self._local_commands.get(key) if isinstance(key, str) else None
+        key_str = key if isinstance(key, str) else None
+        command = self._local_commands.get(key_str) if key_str is not None else None
         if not self._allow_remote_commands or command is None:
             _LOGGER.debug("remote command %r refused (peer %s)", key, self._device_id)
             return
 
         self._command_counter = (self._command_counter + 1) % 2**31
         command_id = self._command_counter
+        scheduler = getattr(self._hass, "async_create_task", None)
+        if scheduler is None:
+            await self._execute_local_command(command_id, key_str, command)
+            return
+        task = scheduler(self._execute_local_command(command_id, key_str, command))
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
+
+    async def _execute_local_command(self, command_id: int, key: str, command: str) -> None:
+        """Run one local command and stream KDE runcommand output packets."""
         try:
             await self._send(
                 make_command_output_packet(
@@ -954,8 +1092,8 @@ class KdePeer:
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            stdout, stderr = await proc.communicate()
         except (OSError, ValueError) as err:
             _LOGGER.warning("remote command %r failed to start: %s", key, err)
             await self._send(
@@ -964,6 +1102,17 @@ class KdePeer:
                 )
             )
             return
+
+        self._command_procs.add(proc)
+        try:
+            stdout, stderr = await proc.communicate()
+        except asyncio.CancelledError:
+            self._terminate_process(proc)
+            with contextlib.suppress(asyncio.CancelledError):
+                await proc.wait()
+            raise
+        finally:
+            self._command_procs.discard(proc)
 
         try:
             await self._send(

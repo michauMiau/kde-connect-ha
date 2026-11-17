@@ -34,6 +34,7 @@ from homeassistant.setup import async_setup_component
 from .const import (
     CONF_ALLOW_REMOTE_COMMANDS,
     CONF_ANNOUNCE,
+    CONF_AUTO_ACCEPT_PAIRING,
     CONF_CAPABILITIES,
     CONF_DEVICE_ID,
     CONF_DEVICE_NAME,
@@ -451,6 +452,9 @@ class KdeConnectOptionsFlow(OptionsFlow):
                     CONF_ALLOW_REMOTE_COMMANDS: bool(
                         user_input.get(CONF_ALLOW_REMOTE_COMMANDS, False)
                     ),
+                    CONF_AUTO_ACCEPT_PAIRING: bool(
+                        user_input.get(CONF_AUTO_ACCEPT_PAIRING, True)
+                    ),
                     CONF_LOCAL_COMMANDS: commands,
                 },
             )
@@ -465,6 +469,7 @@ class KdeConnectOptionsFlow(OptionsFlow):
                 TextSelectorConfig(multiple=True, multiline=True)
             ),
             vol.Optional(CONF_ALLOW_REMOTE_COMMANDS, default=bool(options.get(CONF_ALLOW_REMOTE_COMMANDS, False))): bool,
+            vol.Optional(CONF_AUTO_ACCEPT_PAIRING, default=bool(options.get(CONF_AUTO_ACCEPT_PAIRING, True))): bool,
             vol.Optional(CONF_LOCAL_COMMANDS, default=current_commands): TextSelector(
                 TextSelectorConfig(multiple=True, multiline=True)
             ),

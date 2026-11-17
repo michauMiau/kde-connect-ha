@@ -37,10 +37,11 @@
     "step": {
       "init": {
         "title": "KDE Connect options",
-        "description": "Default SMS recipients (one per line, phone numbers). Local run-commands: one per line as 'key=command'; enable execution to let the device trigger them on this Home Assistant host.",
+        "description": "Default SMS recipients (one per line, phone numbers). Local run-commands: one per line as 'key=command'; enable execution to let the device trigger them on this Home Assistant host. Pairing requests sent from the device are accepted automatically only when enabled.",
         "data": {
           "sms_targets": "Default SMS recipients",
           "allow_remote_commands": "Allow the device to run local commands",
+          "auto_accept_pairing": "Automatically accept pairing requests from the device",
           "commands": "Local commands (key=command, one per line)"
         }
       }
@@ -50,9 +51,6 @@
     "sensor": {
       "battery_percent": {
         "name": "Battery"
-      },
-      "ping_latency": {
-        "name": "Ping latency"
       },
       "notifications": {
         "name": "Notifications received"
@@ -84,6 +82,10 @@
     "pairing_pending": {
       "title": "KDE Connect pairing is not confirmed",
       "description": "Home Assistant is connected to {device_name}, but the device has not confirmed pairing. Call the kde_connect.pair service (or reconfigure the entry) and accept the pairing request in KDE Connect on the device."
+    },
+    "pairing_request": {
+      "title": "KDE Connect pairing request",
+      "description": "{device_name} wants to pair with Home Assistant. Call the kde_connect.accept_pair service to approve it."
     }
   },
   "services": {
@@ -164,6 +166,14 @@
     "unpair": {
       "name": "Unpair device",
       "description": "Tears down the pairing with the device."
+    },
+    "accept_pair": {
+      "name": "Accept pairing request",
+      "description": "Approves a pairing request the device sent to Home Assistant."
+    },
+    "ping": {
+      "name": "Send ping",
+      "description": "Sends a ping to the device (one-way; the device shows a notification)."
     }
   }
 }

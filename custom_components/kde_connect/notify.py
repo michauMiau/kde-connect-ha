@@ -130,6 +130,8 @@ class KdeSmsNotifyEntity(KdeEntityBase, NotifyEntity):
             "addresses": [{"address": addr} for addr in recipients],
             "messageBody": message,
         }
+        # Send through the adapter so capability/pairing checks apply; the
+        # adapter maps the first address onto send_sms for the wire format.
         await self._peer.send_packet(PACKET_TYPE_SMS_REQUEST, body)
 
 
@@ -146,11 +148,12 @@ SMS_DESCRIPTION = NotifyEntityDescription(
 
 
 def notify_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[NotifyEntity]:
-    """Notify entities this peer supports, gated on outgoing capabilities."""
+    """Notify entities this peer supports, gated on send capabilities."""
     entities: list[NotifyEntity] = []
-    if PACKET_TYPE_NOTIFICATION in peer.capabilities:
+    caps = peer.send_capabilities or peer.capabilities
+    if PACKET_TYPE_NOTIFICATION in caps:
         entities.append(KdeNotificationNotifyEntity(peer, state))
-    if PACKET_TYPE_SMS_REQUEST in peer.capabilities:
+    if PACKET_TYPE_SMS_REQUEST in caps:
         entities.append(KdeSmsNotifyEntity(peer, state))
     return entities
 

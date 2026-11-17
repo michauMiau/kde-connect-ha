@@ -42,5 +42,8 @@ async def async_setup_entry(
             async_add_entities([KdeBatteryChargingEntity(_peer, _state)])
 
         state.add_listener(_maybe_add)
+        entry.async_on_unload(
+            lambda _s=state, _cb=_maybe_add: _s.remove_listener(_cb)
+        )
 
     return True

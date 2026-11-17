@@ -4,8 +4,8 @@ Entity state is read live from the shared ``DeviceState`` of one peer: the
 transport pushes packets into ``DeviceState`` and calls ``notify_changed()``,
 which triggers ``async_write_ha_state()`` on the registered entities. The peer
 object (peer.py, class KdePeer) is duck-typed here: it must expose
-``device_id``, ``device_name``, ``device_type``, ``capabilities`` (set of
-incoming packet type strings), and boolean properties ``connected`` (TCP TLS
+``device_id``, ``device_name``, ``device_type``, ``capabilities`` (union of
+advertised packet types), and boolean properties ``connected`` (TCP TLS
 link open) and ``paired``. Availability is ``connected and paired``.
 
 NOTE: HA core (verified against 2026.2.3) has no ``DeviceTrackerEntity`` base
@@ -17,6 +17,7 @@ supported presence source.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,7 +39,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
+from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
@@ -46,7 +47,6 @@ from .const import (
     DOMAIN,
     PACKET_TYPE_BATTERY,
     PACKET_TYPE_NOTIFICATION,
-    PACKET_TYPE_PING,
     PACKET_TYPE_SMS_MESSAGES,
 )
 
@@ -67,7 +67,6 @@ class DeviceState:
     battery_charging: bool | None = None
     battery_quantity: int | None = None
     last_seen: datetime | None = None
-    ping_latency_ms: float | None = None
     notification_count: int = 0
     sms_unread_count: int = 0
     notifications: list[dict[str, Any]] = field(default_factory=list)
@@ -79,6 +78,11 @@ class DeviceState:
     def add_listener(self, listener: Callable[[], None]) -> None:
         """Register a callable invoked whenever state changes."""
         self._listeners.append(listener)
+
+    def remove_listener(self, listener: Callable[[], None]) -> None:
+        """Unregister a listener (best effort)."""
+        with contextlib.suppress(ValueError):
+            self._listeners.remove(listener)
 
     def notify_changed(self) -> None:
         """Tell all registered entities to re-read state and write it."""
@@ -113,7 +117,15 @@ class KdeEntityBase(Entity):
     async def async_added_to_hass(self) -> None:
         """Re-write state whenever push handlers change the shared state."""
         await super().async_added_to_hass()
-        self._state.add_listener(self._handle_state_change)
+        self._state_listener = self._handle_state_change
+        self._state.add_listener(self._state_listener)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop listening to shared state when the entity is removed."""
+        listener = getattr(self, "_state_listener", None)
+        if listener is not None:
+            self._state.remove_listener(listener)
+        await super().async_will_remove_from_hass()
 
     @callback
     def _handle_state_change(self) -> None:
@@ -160,23 +172,6 @@ class KdeBatteryChargingEntity(KdeEntityBase, BinarySensorEntity):
     def is_on(self) -> bool | None:
         """Return True while the device is charging."""
         return self._state.battery_charging
-
-
-class KdePingLatencyEntity(KdeEntityBase, SensorEntity):
-    """Ping latency (ms) sensor updated by kdeconnect.ping round trips."""
-
-    entity_description: SensorEntityDescription
-
-    def __init__(self, peer: KdePeer, state: DeviceState) -> None:
-        """Initialize the ping latency sensor."""
-        super().__init__(peer, state)
-        self.entity_description = PING_LATENCY_DESCRIPTION
-        self._attr_unique_id = f"{peer.device_id}-{PING_LATENCY_DESCRIPTION.key}"
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the last ping round-trip in ms, or None if unmeasured."""
-        return self._state.ping_latency_ms
 
 
 class KdeNotificationsReceivedEntity(KdeEntityBase, SensorEntity):
@@ -266,14 +261,6 @@ BATTERY_CHARGING_DESCRIPTION = BinarySensorEntityDescription(
     entity_category=EntityCategory.DIAGNOSTIC,
 )
 
-PING_LATENCY_DESCRIPTION = SensorEntityDescription(
-    key="ping_latency",
-    native_unit_of_measurement=UnitOfTime.MILLISECONDS,
-    device_class=SensorDeviceClass.DURATION,
-    state_class=SensorStateClass.MEASUREMENT,
-    entity_category=EntityCategory.DIAGNOSTIC,
-)
-
 NOTIFICATIONS_DESCRIPTION = SensorEntityDescription(
     key="notifications",
     state_class=SensorStateClass.TOTAL_INCREASING,
@@ -295,12 +282,10 @@ PRESENCE_DESCRIPTION = ScannerEntityDescription(
 
 def entity_descriptions_for_peer(peer: KdePeer) -> list[str]:
     """Capability-gated entity keys the peer can support (informational)."""
-    caps = peer.capabilities
+    caps = peer.receive_capabilities or peer.capabilities
     keys: list[str] = []
     if PACKET_TYPE_BATTERY in caps:
         keys.append(BATTERY_PERCENT_DESCRIPTION.key)
-    if PACKET_TYPE_PING in caps:
-        keys.append(PING_LATENCY_DESCRIPTION.key)
     if PACKET_TYPE_NOTIFICATION in caps:
         keys.append(NOTIFICATIONS_DESCRIPTION.key)
     if PACKET_TYPE_SMS_MESSAGES in caps:
@@ -311,15 +296,13 @@ def entity_descriptions_for_peer(peer: KdePeer) -> list[str]:
 
 def peer_has_battery_capability(peer: KdePeer) -> bool:
     """Return True when the peer advertises battery capability."""
-    return PACKET_TYPE_BATTERY in peer.capabilities
+    return PACKET_TYPE_BATTERY in (peer.receive_capabilities or peer.capabilities)
 
 
 def sensor_entities_for_peer(peer: KdePeer, state: DeviceState) -> list[SensorEntity]:
     """Sensor entities gated on the peer's advertised capabilities."""
     entities: list[SensorEntity] = []
-    caps = peer.capabilities
-    if PACKET_TYPE_PING in caps:
-        entities.append(KdePingLatencyEntity(peer, state))
+    caps = peer.receive_capabilities or peer.capabilities
     if PACKET_TYPE_NOTIFICATION in caps:
         entities.append(KdeNotificationsReceivedEntity(peer, state))
     if PACKET_TYPE_SMS_MESSAGES in caps:

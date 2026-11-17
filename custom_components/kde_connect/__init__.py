@@ -46,6 +46,7 @@ from homeassistant.helpers.storage import Store
 from . import protocol
 from .const import (
     CONF_ALLOW_REMOTE_COMMANDS,
+    CONF_AUTO_ACCEPT_PAIRING,
     CONF_CAPABILITIES,
     CONF_DEVICE_ID,
     CONF_DEVICE_NAME,
@@ -59,6 +60,7 @@ from .const import (
     DOMAIN,
     EVENT_DEVICE_DISCOVERED,
     EVENT_PAIR_CHANGED,
+    EVENT_PAIR_REQUEST,
     MAX_TCP_PORT,
     MIN_TCP_PORT,
     PACKET_TYPE_NOTIFICATION,
@@ -66,10 +68,12 @@ from .const import (
     PLATFORMS,
     RECONNECT_MAX_DELAY,
     RECONNECT_MIN_DELAY,
+    SERVICE_ACCEPT_PAIR,
     SERVICE_CANCEL_NOTIFICATION,
     SERVICE_FIND_MY_PHONE,
     SERVICE_NOTIFICATION_REPLY,
     SERVICE_PAIR,
+    SERVICE_PING,
     SERVICE_REQUEST_NOTIFICATIONS,
     SERVICE_SEND_NOTIFICATION,
     SERVICE_SEND_SMS,
@@ -104,6 +108,7 @@ SERVICE_CAPABILITIES: dict[str, str] = {
     SERVICE_CANCEL_NOTIFICATION: protocol.CAPABILITY_NOTIFICATION,
     SERVICE_NOTIFICATION_REPLY: protocol.CAPABILITY_NOTIFICATION,
     SERVICE_FIND_MY_PHONE: protocol.CAPABILITY_FIND_MY_PHONE,
+    SERVICE_PING: protocol.CAPABILITY_PING,
 }
 
 
@@ -190,17 +195,16 @@ class _PeerAdapter:
             )
         elif packet_type == PACKET_TYPE_SMS_REQUEST:
             addresses = body.get("addresses") or []
-            phone = str(
-                body.get("phoneNumber")
-                or (
-                    addresses[0].get("address")
-                    if addresses and isinstance(addresses[0], dict)
-                    else ""
-                )
-                or ""
-            )
+            phone_numbers = [
+                str(item.get("address"))
+                for item in addresses
+                if isinstance(item, dict) and item.get("address")
+            ]
+            if not phone_numbers and body.get("phoneNumber"):
+                phone_numbers = [str(body["phoneNumber"])]
             message = str(body.get("messageBody") or body.get("message") or "")
-            await peer.send_sms(phone, message)
+            for phone in phone_numbers:
+                await peer.send_sms(phone, message)
         else:
             raise protocol.ProtocolError(f"unsupported notify packet type {packet_type!r}")
 
@@ -297,6 +301,7 @@ class KdeConnectManager:
         self.hass.data[DOMAIN][entry.entry_id] = {
             "peers": {str(device_id): _PeerAdapter(peer)},
             "states": {str(device_id): peer.state},
+            "options": dict(entry.options),
         }
         self._persist_identity(entry, peer)
         self._sync_pairing_issue(str(device_id))
@@ -305,7 +310,6 @@ class KdeConnectManager:
             f"kde_connect_reconnect_{device_id}",
             eager_start=True,
         )
-        self._sync_pairing_issue(str(device_id))
 
     async def remove_entry(self, entry: ConfigEntry) -> None:
         """Drop the peer belonging to an entry."""
@@ -339,6 +343,9 @@ class KdeConnectManager:
             inbound_port=entry.data.get(CONF_INBOUND_PORT, self.inbound_port),
             allow_remote_commands=bool(options.get(CONF_ALLOW_REMOTE_COMMANDS, False)),
             local_commands=_parse_local_commands(options.get(CONF_LOCAL_COMMANDS)),
+            auto_accept_pairing=bool(
+                options.get(CONF_AUTO_ACCEPT_PAIRING, True)
+            ),
             peer_paired=entry.data.get(
                 CONF_PAIRED, True if entry.data.get(CONF_PEER_CERT) else None
             ),
@@ -487,27 +494,30 @@ class KdeConnectManager:
 
         peer.state.add_listener(_watch)
         delay = RECONNECT_MIN_DELAY
-        while not self._stopped and entry_id in self.device_entries:
-            if peer.connected:
+        try:
+            while not self._stopped and entry_id in self.device_entries:
+                if peer.connected:
+                    delay = RECONNECT_MIN_DELAY
+                    entry = self.hass.config_entries.async_get_entry(entry_id)
+                    if entry is not None:
+                        self._persist_identity(entry, peer)
+                    self._sync_pairing_issue(peer.device_id)
+                    wake.clear()
+                    await wake.wait()
+                    continue
+                await asyncio.sleep(delay)
+                if peer.connected or self._stopped or entry_id not in self.device_entries:
+                    continue
+                try:
+                    await peer.connect()
+                except protocol.ProtocolError:
+                    _LOGGER.debug("KDE Connect reconnect to %s failed", peer.device_id)
+                    delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                    self._sync_pairing_issue(peer.device_id)
+                    continue
                 delay = RECONNECT_MIN_DELAY
-                entry = self.hass.config_entries.async_get_entry(entry_id)
-                if entry is not None:
-                    self._persist_identity(entry, peer)
-                self._sync_pairing_issue(peer.device_id)
-                wake.clear()
-                await wake.wait()
-                continue
-            await asyncio.sleep(delay)
-            if peer.connected or self._stopped or entry_id not in self.device_entries:
-                continue
-            try:
-                await peer.connect()
-            except protocol.ProtocolError:
-                _LOGGER.debug("KDE Connect reconnect to %s failed", peer.device_id)
-                delay = min(delay * 2, RECONNECT_MAX_DELAY)
-                self._sync_pairing_issue(peer.device_id)
-                continue
-            delay = RECONNECT_MIN_DELAY
+        finally:
+            peer.state.remove_listener(_watch)
 
     @callback
     def _on_pair_changed(self, event: Event) -> None:
@@ -516,6 +526,25 @@ class KdeConnectManager:
         device_id = data.get("device_id")
         if device_id:
             self._sync_pairing_issue(str(device_id))
+
+    def _on_pair_request(self, event: Event) -> None:
+        """Show a repair issue when a device asks to pair (auto-accept off)."""
+        data = event.data if isinstance(event.data, dict) else {}
+        device_id = data.get("device_id")
+        if not device_id:
+            return
+        name = self._device_name_for(str(device_id))
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"pairing_request_{device_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="pairing_request",
+            translation_placeholders={"device_name": name},
+            data={"device_id": str(device_id)},
+        )
 
     # ---------------------------------------------------------------- repairs
     def _device_name_for(self, device_id: str) -> str:
@@ -556,7 +585,7 @@ class KdeConnectManager:
         paired = bool(peer and peer.paired)
         self._persist_paired(device_id, paired)
         if paired:
-            self._clear_pairing_issue(device_id)
+            self._clear_pairing_issues(device_id)
             return
         name = self._device_name_for(device_id)
         ir.async_create_issue(
@@ -571,8 +600,12 @@ class KdeConnectManager:
             data={"device_id": device_id},
         )
 
-    def _clear_pairing_issue(self, device_id: str) -> None:
+    def _clear_pairing_issues(self, device_id: str) -> None:
         ir.async_delete_issue(self.hass, DOMAIN, f"pairing_pending_{device_id}")
+        ir.async_delete_issue(self.hass, DOMAIN, f"pairing_request_{device_id}")
+
+    def _clear_pairing_issue(self, device_id: str) -> None:
+        self._clear_pairing_issues(device_id)
 
     # ------------------------------------------------- post-handshake updates
     def _persist_identity(self, entry: ConfigEntry, peer: KdePeer) -> None:
@@ -724,9 +757,17 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_ha_stop)
     hass.bus.async_listen(EVENT_PAIR_CHANGED, manager._on_pair_changed)
+    hass.bus.async_listen(EVENT_PAIR_REQUEST, manager._on_pair_request)
 
     _register_services(hass, manager)
     return True
+
+
+async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when its options (commands, pairing) change."""
+    runtime = hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
+    if runtime.get("options") != entry.options:
+        await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -736,6 +777,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady("KDE Connect integration setup has not run")
     manager: KdeConnectManager = data[DATA_MANAGER]
     await manager.setup_entry(entry)
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -813,6 +855,16 @@ def _register_services(hass: HomeAssistant, manager: KdeConnectManager) -> None:
         _require_ready(manager, peer, SERVICE_UNPAIR, require_paired=False)
         await _await_peer(peer.unpair(), peer)
 
+    async def accept_pair(call: ServiceCall) -> None:
+        peer = manager.peer_for_call(call)
+        _require_ready(manager, peer, SERVICE_ACCEPT_PAIR, require_paired=False)
+        await _await_peer(peer.accept_pair(), peer)
+
+    async def ping(call: ServiceCall) -> None:
+        peer = manager.peer_for_call(call)
+        _require_ready(manager, peer, SERVICE_PING)
+        await _await_peer(peer.ping(), peer)
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND_NOTIFICATION,
@@ -862,5 +914,11 @@ def _register_services(hass: HomeAssistant, manager: KdeConnectManager) -> None:
         DOMAIN, SERVICE_PAIR, pair, schema=_schema({})
     )
     hass.services.async_register(
+        DOMAIN, SERVICE_ACCEPT_PAIR, accept_pair, schema=_schema({})
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_UNPAIR, unpair, schema=_schema({})
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_PING, ping, schema=_schema({})
     )

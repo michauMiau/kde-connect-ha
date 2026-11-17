@@ -54,6 +54,7 @@ CONF_ANNOUNCE: Final = "announce"
 CONF_ALLOW_REMOTE_COMMANDS: Final = "allow_remote_commands"
 CONF_LOCAL_COMMANDS: Final = "commands"
 CONF_PAIRED: Final = "paired"
+CONF_AUTO_ACCEPT_PAIRING: Final = "auto_accept_pairing"
 
 EVENT_NOTIFICATION_RECEIVED: Final = "kdeconnect_notification_received"
 EVENT_NOTIFICATION_REQUEST: Final = "kdeconnect_notification_request"
@@ -72,7 +73,9 @@ SERVICE_REQUEST_NOTIFICATIONS: Final = "request_notifications"
 SERVICE_CANCEL_NOTIFICATION: Final = "cancel_notification"
 SERVICE_NOTIFICATION_REPLY: Final = "notification_reply"
 SERVICE_PAIR: Final = "pair"
+SERVICE_ACCEPT_PAIR: Final = "accept_pair"
 SERVICE_UNPAIR: Final = "unpair"
+SERVICE_PING: Final = "ping"
 
 DISCOVERY_KEY: Final = "device_id"
 

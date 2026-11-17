@@ -477,15 +477,27 @@ def parse_battery(packet: dict[str, Any]) -> dict[str, Any]:
     """Normalize an incoming ``kdeconnect.battery`` push body.
 
     Wire fields: ``isCharging`` (bool), ``currentCharge`` (int),
-    ``batteryQuantity`` (int), ``thresholdEvent`` (int).
+    ``batteryQuantity`` (int), ``thresholdEvent`` (int). Values are coerced
+    defensively so one malformed push cannot kill the session.
     """
     body = _body_of(packet)
+
+    def _int(value: Any, default: int) -> int:
+        if isinstance(value, bool):
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     threshold = body.get("thresholdEvent")
+    charge = _int(body.get("currentCharge"), 0)
+    quantity = _int(body.get("batteryQuantity"), -1)
     return {
         "is_charging": bool(body.get("isCharging", False)),
-        "current_charge": int(body.get("currentCharge", 0)),
-        "battery_quantity": int(body.get("batteryQuantity", -1)),
-        "threshold_event": int(threshold) if threshold is not None else 0,
+        "current_charge": charge,
+        "battery_quantity": quantity,
+        "threshold_event": _int(threshold, 0),
     }
 
 
@@ -838,6 +850,9 @@ def server_tls_context(
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_verify_locations(cadata=peer_cert_pem)
     else:
+        # No pinned certificate yet: the peer cannot be verified on this first
+        # (trust-on-first-use) session. The encrypted identity deviceId is
+        # still enforced, and the certificate is pinned on inbound sessions.
         context.verify_mode = ssl.CERT_NONE
     return context
 

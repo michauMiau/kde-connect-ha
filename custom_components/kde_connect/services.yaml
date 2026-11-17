@@ -88,3 +88,13 @@ unpair:
     entity:
       integration: kde_connect
   fields: {}
+accept_pair:
+  target:
+    entity:
+      integration: kde_connect
+  fields: {}
+ping:
+  target:
+    entity:
+      integration: kde_connect
+  fields: {}

@@ -552,11 +552,11 @@ async def test_pairing_request_does_not_create_repair_issue(
         assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_notification_service_and_ping_roundtrip(
+async def test_notification_service_and_ping_send(
     hass: HomeAssistant,
     enable_custom_integrations: None,
 ) -> None:
-    """kde_connect.send_notification travels over the TLS session; ping echoes."""
+    """kde_connect.send_notification travels over the TLS session; ping is sent."""
     async with FakeDevice() as fake:
         manager = await setup_integration(hass)
         await setup_entry(hass, fake)
@@ -574,9 +574,7 @@ async def test_notification_service_and_ping_roundtrip(
         assert notifications[0]["body"]["appName"] == "Home Assistant"
 
         peer = manager.peers[fake.device_id]
-        latency = await peer.ping()
-        assert latency is not None and latency >= 0
-        assert peer.state.ping_latency_ms is not None
+        assert await peer.ping() is None
         assert [p for p in fake.received if p["type"] == PACKET_TYPE_PING]
 
 
@@ -616,7 +614,7 @@ async def test_session_drop_marks_entities_unavailable(
     enable_custom_integrations: None,
     entity_registry: Any,
 ) -> None:
-    """Device-initiated session close flips connected/paired and entity states."""
+    """Device-initiated session close flips connected and entity states."""
     async with FakeDevice() as fake:
         manager = await setup_integration(hass)
         entry = await setup_entry(hass, fake)

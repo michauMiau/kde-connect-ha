@@ -112,8 +112,6 @@ class KdeConnectDiscovery:
     @callback
     def _async_handle_identity(self, device_id: str, host: str, body: dict[str, Any]) -> None:
         future = self._pending_probes.pop(host, None)
-        if future is None and self._pending_probes:
-            future = self._pending_probes.pop(next(iter(self._pending_probes)))
         if future is not None and not future.done():
             future.set_result(
                 {
