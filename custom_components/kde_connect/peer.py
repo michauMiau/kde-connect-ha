@@ -42,6 +42,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import signal
 import time
@@ -135,6 +136,20 @@ MAX_LINE_BYTES = 512 * 1024
 MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 
 _NOTIFICATION_KEEP = 20
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Coerce an MPRIS numeric field, rejecting NaN/inf and bad types."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class KdePeer:
@@ -1184,10 +1199,7 @@ class KdePeer:
                     info[key] = bool(body.get(key))
             for key in ("volume", "length", "pos"):
                 if key in body:
-                    try:
-                        info[key] = int(body.get(key))
-                    except (TypeError, ValueError):
-                        pass
+                    info[key] = _coerce_int(body.get(key))
             self.state.mpris_players[player] = info
             if self.state.mpris_current_player is None:
                 self.state.mpris_current_player = player

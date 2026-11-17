@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -89,7 +90,7 @@ class KdeMprisMediaPlayer(KdeEntityBase, MediaPlayerEntity):
     @property
     def media_duration(self) -> int | None:
         length = self._player.get("length")
-        if length is None or length < 0:
+        if length is None or length <= 0:
             return None
         return int(length // 1000)
 
@@ -106,9 +107,10 @@ class KdeMprisMediaPlayer(KdeEntityBase, MediaPlayerEntity):
         if vol is None:
             return None
         try:
-            return max(0.0, min(1.0, float(vol) / 100.0))
+            level = max(0.0, min(1.0, float(vol) / 100.0))
         except (TypeError, ValueError):
             return None
+        return level if math.isfinite(level) else None
 
     @property
     def source(self) -> str | None:
