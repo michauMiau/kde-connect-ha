@@ -782,7 +782,7 @@ def create_local_identity(
 # TLS contexts
 # ---------------------------------------------------------------------------
 
-def client_tls_context(
+async def client_tls_context(
     peer_cert_pem: str | None = None,
     cert_pem: str | None = None,
     key_pem: str | None = None,
@@ -804,7 +804,7 @@ def client_tls_context(
     else:
         context.verify_mode = ssl.CERT_NONE
     if cert_pem and key_pem:
-        _load_cert_chain(context, cert_pem, key_pem)
+        await _load_cert_chain_async(context, cert_pem, key_pem)
     return context
 
 
@@ -833,7 +833,15 @@ def _load_cert_chain(
                 Path(path).unlink(missing_ok=True)
 
 
-def server_tls_context(
+async def _load_cert_chain_async(
+    context: ssl.SSLContext, cert_pem: str, key_pem: str
+) -> None:
+    """Load the certificate chain off the event loop (temp-file based)."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _load_cert_chain, context, cert_pem, key_pem)
+
+
+async def server_tls_context(
     cert_pem: str,
     key_pem: str,
     peer_cert_pem: str | None = None,
@@ -845,7 +853,7 @@ def server_tls_context(
     connect (deviceId match is enforced at the identity packet level).
     """
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    _load_cert_chain(context, cert_pem, key_pem)
+    await _load_cert_chain_async(context, cert_pem, key_pem)
     if peer_cert_pem:
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_verify_locations(cadata=peer_cert_pem)

@@ -311,7 +311,7 @@ class KdePeer:
             await upgrade_tls(
                 reader,
                 writer,
-                server_tls_context(
+                await server_tls_context(
                     self._identity.cert_pem,
                     self._identity.key_pem,
                     peer_cert_pem=self._peer_cert_pem,
@@ -458,7 +458,7 @@ class KdePeer:
             await upgrade_tls(
                 reader,
                 writer,
-                client_tls_context(
+                await client_tls_context(
                     self._peer_cert_pem,
                     self._identity.cert_pem,
                     self._identity.key_pem,
@@ -654,7 +654,7 @@ class KdePeer:
             await upgrade_tls(
                 reader,
                 writer,
-                server_tls_context(
+                await server_tls_context(
                     self._identity.cert_pem,
                     self._identity.key_pem,
                     peer_cert_pem=self._peer_cert_pem,
@@ -691,7 +691,7 @@ class KdePeer:
             await upgrade_tls(
                 reader,
                 writer,
-                client_tls_context(
+                await client_tls_context(
                     self._peer_cert_pem,
                     self._identity.cert_pem,
                     self._identity.key_pem,

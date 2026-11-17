@@ -242,7 +242,7 @@ class FakeDevice:
 
             # KDE: TCP server reads plaintext connection packet, then immediately
             # starts TLS (as TLS client). No plaintext reply in between.
-            context = protocol.client_tls_context(
+            context = await protocol.client_tls_context(
                 self.ha_cert_pem, self.identity.cert_pem, self.identity.key_pem
             )
             await protocol.upgrade_tls(
@@ -293,7 +293,7 @@ class FakeDevice:
         info = packet["payloadTransferInfo"]
         size = int(packet["payloadSize"])
         # KDE inverts TLS roles: we opened this as a TCP client, so TLS server.
-        context = protocol.server_tls_context(
+        context = await protocol.server_tls_context(
             self.identity.cert_pem, self.identity.key_pem
         )
         reader, writer = await asyncio.open_connection(str(info["ip"]), int(info["port"]))
@@ -377,7 +377,7 @@ class FakeDevice:
         # ``server_cert_pem`` is HA's certificate, presented by HA as the TLS
         # client; the TLS server context here runs CERT_NONE (Qt behavior:
         # no client-certificate request on outgoing device-initiated sessions).
-        context = protocol.server_tls_context(
+        context = await protocol.server_tls_context(
             self.identity.cert_pem, self.identity.key_pem
         )
         await protocol.upgrade_tls(
