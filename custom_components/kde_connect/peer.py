@@ -1200,6 +1200,8 @@ class KdePeer:
             for key in ("volume", "length", "pos"):
                 if key in body:
                     info[key] = _coerce_int(body.get(key))
+            if info.get("isPlaying") or "pos" in body:
+                self.state.mpris_position_updated_at = datetime.now(UTC)
             self.state.mpris_players[player] = info
             if self.state.mpris_current_player is None:
                 self.state.mpris_current_player = player

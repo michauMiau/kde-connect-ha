@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.media_player import (
@@ -98,8 +99,14 @@ class KdeMprisMediaPlayer(KdeEntityBase, MediaPlayerEntity):
     def media_position(self) -> int | None:
         pos = self._player.get("pos")
         if pos is None or pos < 0:
-            return None
+            # The frontend extrapolates progress for playing players; a
+            # missing position would render as NaN:NaN.
+            return 0 if self._player.get("isPlaying") else None
         return int(pos // 1000)
+
+    @property
+    def media_position_updated_at(self) -> datetime | None:
+        return self._state.mpris_position_updated_at
 
     @property
     def volume_level(self) -> float | None:

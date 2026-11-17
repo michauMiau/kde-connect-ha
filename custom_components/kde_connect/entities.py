@@ -72,6 +72,7 @@ class DeviceState:
     notifications: list[dict[str, Any]] = field(default_factory=list)
     mpris_players: dict[str, dict[str, Any]] = field(default_factory=dict)
     mpris_current_player: str | None = None
+    mpris_position_updated_at: datetime | None = None
 
     _listeners: list[Callable[[], None]] = field(default_factory=list, repr=False)
 
