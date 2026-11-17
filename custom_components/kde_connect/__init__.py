@@ -53,6 +53,7 @@ from .const import (
     CONF_HOST,
     CONF_INBOUND_PORT,
     CONF_LOCAL_COMMANDS,
+    CONF_PAIRED,
     CONF_PEER_CERT,
     CONF_TCP_PORT,
     DOMAIN,
@@ -68,9 +69,11 @@ from .const import (
     SERVICE_CANCEL_NOTIFICATION,
     SERVICE_FIND_MY_PHONE,
     SERVICE_NOTIFICATION_REPLY,
+    SERVICE_PAIR,
     SERVICE_REQUEST_NOTIFICATIONS,
     SERVICE_SEND_NOTIFICATION,
     SERVICE_SEND_SMS,
+    SERVICE_UNPAIR,
     UDP_PORT,
 )
 from .discovery import KdeConnectDiscovery
@@ -296,6 +299,7 @@ class KdeConnectManager:
             "states": {str(device_id): peer.state},
         }
         self._persist_identity(entry, peer)
+        self._sync_pairing_issue(str(device_id))
         self._reconnect[entry.entry_id] = self.hass.async_create_background_task(
             self._async_reconnect_loop(entry.entry_id, peer),
             f"kde_connect_reconnect_{device_id}",
@@ -335,6 +339,9 @@ class KdeConnectManager:
             inbound_port=entry.data.get(CONF_INBOUND_PORT, self.inbound_port),
             allow_remote_commands=bool(options.get(CONF_ALLOW_REMOTE_COMMANDS, False)),
             local_commands=_parse_local_commands(options.get(CONF_LOCAL_COMMANDS)),
+            peer_paired=entry.data.get(
+                CONF_PAIRED, True if entry.data.get(CONF_PEER_CERT) else None
+            ),
         )
 
     @staticmethod
@@ -504,16 +511,65 @@ class KdeConnectManager:
 
     @callback
     def _on_pair_changed(self, event: Event) -> None:
-        """Mirror live pair state into the repairs issue registry."""
+        """Mirror live pair state into the entry data and repairs registry."""
         data = event.data if isinstance(event.data, dict) else {}
         device_id = data.get("device_id")
         if device_id:
             self._sync_pairing_issue(str(device_id))
 
     # ---------------------------------------------------------------- repairs
+    def _device_name_for(self, device_id: str) -> str:
+        """Best-effort display name for a peer."""
+        peer = self.peers.get(device_id)
+        if peer is not None and peer.device_name:
+            return peer.device_name
+        entry_id = self.device_entries.get(device_id)
+        entry = (
+            self.hass.config_entries.async_get_entry(entry_id)
+            if entry_id is not None
+            else None
+        )
+        if entry is not None:
+            return str(entry.data.get(CONF_DEVICE_NAME) or entry.title)
+        return device_id
+
+    def _persist_paired(self, device_id: str, paired: bool) -> None:
+        """Store the pairing flag on the config entry."""
+        entry_id = self.device_entries.get(device_id)
+        entry = (
+            self.hass.config_entries.async_get_entry(entry_id)
+            if entry_id is not None
+            else None
+        )
+        if entry is None or bool(entry.data.get(CONF_PAIRED)) == paired:
+            return
+        try:
+            self.hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_PAIRED: paired}
+            )
+        except Exception:
+            _LOGGER.debug("could not persist KDE Connect pairing state", exc_info=True)
+
     def _sync_pairing_issue(self, device_id: str) -> None:
-        # Pairing is handled by config flow/UI; avoid persistent repair spam.
-        self._clear_pairing_issue(device_id)
+        """Keep the pairing repair issue and stored flag in sync with the peer."""
+        peer = self.peers.get(device_id)
+        paired = bool(peer and peer.paired)
+        self._persist_paired(device_id, paired)
+        if paired:
+            self._clear_pairing_issue(device_id)
+            return
+        name = self._device_name_for(device_id)
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"pairing_pending_{device_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="pairing_pending",
+            translation_placeholders={"device_name": name},
+            data={"device_id": device_id},
+        )
 
     def _clear_pairing_issue(self, device_id: str) -> None:
         ir.async_delete_issue(self.hass, DOMAIN, f"pairing_pending_{device_id}")
@@ -614,16 +670,22 @@ class KdeConnectManager:
 
 
 @callback
-def _require_ready(manager: KdeConnectManager, peer: KdePeer, service: str) -> None:
+def _require_ready(
+    manager: KdeConnectManager,
+    peer: KdePeer,
+    service: str,
+    *,
+    require_paired: bool = True,
+) -> None:
     """Gate a service call on connection, pairing and peer capability."""
     if not peer.connected:
         raise ServiceValidationError(
             f"KDE Connect device {peer.device_name} is not connected"
         )
-    if not peer.paired:
+    if require_paired and not peer.paired:
         raise ServiceValidationError(
-            f"KDE Connect pairing is not confirmed for {peer.device_name}; open "
-            "the KDE Connect app on the device to accept the pairing request"
+            f"KDE Connect pairing is not confirmed for {peer.device_name}; call "
+            "kde_connect.pair and accept the request on the device"
         )
     capability = SERVICE_CAPABILITIES.get(service)
     if capability is not None and capability not in peer.send_capabilities:
@@ -736,6 +798,21 @@ def _register_services(hass: HomeAssistant, manager: KdeConnectManager) -> None:
             peer,
         )
 
+    async def pair(call: ServiceCall) -> None:
+        peer = manager.peer_for_call(call)
+        _require_ready(manager, peer, SERVICE_PAIR, require_paired=False)
+        paired = await _await_peer(peer.request_pair(), peer)
+        if not paired:
+            raise ServiceValidationError(
+                f"KDE Connect device {peer.device_name} did not accept the pairing "
+                "request within the timeout"
+            )
+
+    async def unpair(call: ServiceCall) -> None:
+        peer = manager.peer_for_call(call)
+        _require_ready(manager, peer, SERVICE_UNPAIR, require_paired=False)
+        await _await_peer(peer.unpair(), peer)
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND_NOTIFICATION,
@@ -780,4 +857,10 @@ def _register_services(hass: HomeAssistant, manager: KdeConnectManager) -> None:
         schema=_schema(
             {vol.Required("reply_id"): str, vol.Required("message"): str}
         ),
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_PAIR, pair, schema=_schema({})
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UNPAIR, unpair, schema=_schema({})
     )

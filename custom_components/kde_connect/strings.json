@@ -80,7 +80,12 @@
       }
     }
   },
-  "issues": {},
+  "issues": {
+    "pairing_pending": {
+      "title": "KDE Connect pairing is not confirmed",
+      "description": "Home Assistant is connected to {device_name}, but the device has not confirmed pairing. Call the kde_connect.pair service (or reconfigure the entry) and accept the pairing request in KDE Connect on the device."
+    }
+  },
   "services": {
     "send_notification": {
       "name": "Send notification",
@@ -151,6 +156,14 @@
           "description": "Reply text."
         }
       }
+    },
+    "pair": {
+      "name": "Pair device",
+      "description": "Sends a pairing request to the device and waits for it to be accepted in KDE Connect."
+    },
+    "unpair": {
+      "name": "Unpair device",
+      "description": "Tears down the pairing with the device."
     }
   }
 }

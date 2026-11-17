@@ -78,3 +78,13 @@ notification_reply:
         text:
           multiline: true
       name: Reply text
+pair:
+  target:
+    entity:
+      integration: kde_connect
+  fields: {}
+unpair:
+  target:
+    entity:
+      integration: kde_connect
+  fields: {}

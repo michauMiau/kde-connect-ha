@@ -12,7 +12,7 @@ Also check out [KOSPEL PPE4 for Home Assistant](https://github.com/michauMiau/pp
 - **Sensors**: battery charge, charging state, battery quantity; device availability
 - **Media player**: MPRIS remote control of the device's active player (play/pause/next/previous/seek/volume/source)
 - **Run commands**: HA acts as the desktop side — define `key=command` lines in the entry options, enable execution, and trigger them from KDE Connect on the device
-- **Services**: send notification, cancel notification, request notifications, notification reply, SMS, find-my-phone
+- **Services**: send notification, cancel notification, request notifications, notification reply, SMS, find-my-phone, pair, unpair
 - **Events**: device discovered, pair request, battery change, ping, notifications, SMS, command output
 
 ## Installation
@@ -45,6 +45,11 @@ Connect on the device.
 To run commands on the Home Assistant host from the device, open the entry's
 **Options**, add `key=command` lines and enable *Allow the device to run local
 commands*.
+
+If a device shows as unavailable, pairing is not confirmed. Call the
+`kde_connect.pair` service (target the device) and accept the request in KDE
+Connect on the device; `kde_connect.unpair` tears it down. Pairing state is
+stored on the entry, so reloads keep entities available.
 
 ## Development
 

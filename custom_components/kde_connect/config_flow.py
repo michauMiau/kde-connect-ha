@@ -41,6 +41,7 @@ from .const import (
     CONF_HOST,
     CONF_INBOUND_PORT,
     CONF_LOCAL_COMMANDS,
+    CONF_PAIRED,
     CONF_PEER_CERT,
     CONF_TCP_PORT,
     DOMAIN,
@@ -410,6 +411,7 @@ class KdeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_CAPABILITIES: capabilities,
             CONF_INBOUND_PORT: inbound_port,
             CONF_ANNOUNCE: True,
+            CONF_PAIRED: True,
         }
 
         await self._close_peer(peer)

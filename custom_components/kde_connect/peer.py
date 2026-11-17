@@ -152,6 +152,7 @@ class KdePeer:
         allow_remote_commands: bool = False,
         local_commands: dict[str, str] | None = None,
         inbound_port: int | None = None,
+        peer_paired: bool | None = None,
     ) -> None:
         """Initialize a live session with one remote peer device."""
         self._hass = hass
@@ -178,7 +179,9 @@ class KdePeer:
         self._loop_task: asyncio.Task[None] | None = None
         self._closing = False
         self._connected = False
-        self._paired = False
+        self._paired = bool(peer_paired)
+        self._paired_known = peer_paired is not None
+        self._pair_rejected = False
 
         self._pair_event = asyncio.Event()
         self._ping_event = asyncio.Event()
@@ -316,6 +319,28 @@ class KdePeer:
         if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.send_command_list()
+        if not self._paired_known:
+            scheduler = getattr(self._hass, "async_create_task", None)
+            if scheduler is not None:
+                scheduler(self._detect_paired())
+
+    async def _detect_paired(self) -> None:
+        """Legacy entries: infer pairing when the peer does not reject us.
+
+        An unpaired KDE Connect device answers a paired-only packet with
+        ``kdeconnect.pair {pair: false}``; a paired one stays silent (or
+        answers the request). Wait a moment, then assume paired.
+        """
+        await asyncio.sleep(2.0)
+        if not self._connected or self._paired or self._pair_rejected:
+            return
+        self._paired = True
+        self._paired_known = True
+        self.state.notify_changed()
+        _LOGGER.info(
+            "KDE Connect peer %s accepted the session as paired", self._device_id
+        )
+        self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": True})
 
     async def serve(self, reader, writer, tcp_port: int | None = None) -> None:
         """Accept an inbound session started by asyncio.start_server."""
@@ -397,6 +422,10 @@ class KdePeer:
         if self._paired and PACKET_TYPE_RUNCOMMAND_REQUEST in self.send_capabilities:
             with contextlib.suppress(HandshakeError, ProtocolError, TimeoutError, OSError):
                 await self.send_command_list()
+        if not self._paired_known:
+            scheduler = getattr(self._hass, "async_create_task", None)
+            if scheduler is not None:
+                scheduler(self._detect_paired())
 
     async def close(self) -> None:
         """Close the session; idempotent."""
@@ -607,6 +636,9 @@ class KdePeer:
         if not self._connected:
             raise HandshakeError("peer session is not connected")
         await self._send(make_pair_unpair())
+        self._paired = False
+        self.state.notify_changed()
+        self._fire(EVENT_PAIR_CHANGED, {"device_id": self._device_id, "paired": False})
 
     async def ping(self) -> float | None:
         """Send a ping packet and return round-trip latency in ms, or None."""
@@ -796,6 +828,8 @@ class KdePeer:
 
     async def _handle_pair(self, body: dict[str, Any]) -> None:
         pair = bool(body.get("pair"))
+        if not pair:
+            self._pair_rejected = True
         requested = pair and body.get("timestamp") is not None
         if requested:
             # Peer initiated a pairing request — accept (config flow gates it).

@@ -53,6 +53,7 @@ CONF_INBOUND_PORT: Final = "inbound_port"
 CONF_ANNOUNCE: Final = "announce"
 CONF_ALLOW_REMOTE_COMMANDS: Final = "allow_remote_commands"
 CONF_LOCAL_COMMANDS: Final = "commands"
+CONF_PAIRED: Final = "paired"
 
 EVENT_NOTIFICATION_RECEIVED: Final = "kdeconnect_notification_received"
 EVENT_NOTIFICATION_REQUEST: Final = "kdeconnect_notification_request"
@@ -70,7 +71,8 @@ SERVICE_FIND_MY_PHONE: Final = "find_my_phone"
 SERVICE_REQUEST_NOTIFICATIONS: Final = "request_notifications"
 SERVICE_CANCEL_NOTIFICATION: Final = "cancel_notification"
 SERVICE_NOTIFICATION_REPLY: Final = "notification_reply"
-SERVICE_RUN_COMMAND: Final = "run_command"
+SERVICE_PAIR: Final = "pair"
+SERVICE_UNPAIR: Final = "unpair"
 
 DISCOVERY_KEY: Final = "device_id"
 
