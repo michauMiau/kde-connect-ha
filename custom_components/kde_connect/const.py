@@ -9,6 +9,7 @@ from homeassistant.const import Platform
 DOMAIN: Final = "kde_connect"
 PLATFORMS: Final[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.DEVICE_TRACKER,
     Platform.MEDIA_PLAYER,
     Platform.NOTIFY,

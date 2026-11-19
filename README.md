@@ -11,7 +11,7 @@ Also check out [KOSPEL PPE4 for Home Assistant](https://github.com/michauMiau/pp
 - Full KDE Connect protocol v8: UDP listen/probe, TCP sessions, plaintext packet + TLS (KDE's inverted TLS roles), encrypted identity, pairing trust-on-first-use
 - **Sensors**: battery charge, charging state, battery quantity; device availability
 - **Media player**: MPRIS remote control of the device's active player (play/pause/next/previous/seek/volume/source)
-- **Run commands**: HA acts as the desktop side — define `key=command` lines in the entry options, enable execution, and trigger them from KDE Connect on the device
+- **Run commands**: HA acts as the desktop side — define `key=command` lines in the entry options, enable execution, and trigger them from KDE Connect on the device. Each configured command also gets a HA **button** that runs it locally (output is emitted as a `kdeconnect_command_output` event).
 - **Services**: send notification, cancel notification, request notifications, notification reply, SMS, find-my-phone, ping, pair, accept_pair, unpair
 - **Events**: device discovered, pair request, battery change, ping, notifications, SMS, command output
 
@@ -44,7 +44,9 @@ Connect on the device.
 
 To run commands on the Home Assistant host from the device, open the entry's
 **Options**, add `key=command` lines and enable *Allow the device to run local
-commands*.
+commands*. Each line also creates a `button.<key>` entity in HA that runs the
+command locally; its stdout/stderr/exit code are emitted as
+`kdeconnect_command_output` events for automations.
 
 If a device shows as unavailable, pairing is not confirmed. Call the
 `kde_connect.pair` service (target the device) and accept the request in KDE

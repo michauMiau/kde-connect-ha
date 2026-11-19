@@ -1090,17 +1090,25 @@ class KdePeer:
         self._command_tasks.add(task)
         task.add_done_callback(self._command_tasks.discard)
 
-    async def _execute_local_command(self, command_id: int, key: str, command: str) -> None:
-        """Run one local command and stream KDE runcommand output packets."""
-        try:
-            await self._send(
-                make_command_output_packet(
-                    command_id=command_id, command=command, started=True
+    async def _execute_local_command(
+        self,
+        command_id: int,
+        key: str,
+        command: str,
+        *,
+        notify_peer: bool = True,
+    ) -> dict[str, Any]:
+        """Run one local command; optionally stream KDE runcommand output."""
+        if notify_peer:
+            try:
+                await self._send(
+                    make_command_output_packet(
+                        command_id=command_id, command=command, started=True
+                    )
                 )
-            )
-        except (HandshakeError, ProtocolError, TimeoutError, OSError):
-            _LOGGER.debug("could not announce command start to %s", self._device_id)
-            return
+            except (HandshakeError, ProtocolError, TimeoutError, OSError):
+                _LOGGER.debug("could not announce command start to %s", self._device_id)
+                return {"success": False, "exit_code": 1, "stdout": [], "stderr": []}
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -1111,12 +1119,15 @@ class KdePeer:
             )
         except (OSError, ValueError) as err:
             _LOGGER.warning("remote command %r failed to start: %s", key, err)
-            await self._send(
-                make_command_output_packet(
-                    command_id=command_id, success=False, exit_code=1, finished=True
+            result = {"success": False, "exit_code": 1, "stdout": [], "stderr": []}
+            if notify_peer:
+                await self._send(
+                    make_command_output_packet(
+                        command_id=command_id, success=False, exit_code=1, finished=True
+                    )
                 )
-            )
-            return
+            self._fire_command_result(command_id, key, command, result)
+            return result
 
         self._command_procs.add(proc)
         try:
@@ -1129,25 +1140,72 @@ class KdePeer:
         finally:
             self._command_procs.discard(proc)
 
-        try:
-            await self._send(
-                make_command_output_packet(
-                    command_id=command_id,
-                    stdout=stdout.decode("utf-8", "replace").splitlines(),
-                    stderr=stderr.decode("utf-8", "replace").splitlines(),
-                    output=True,
+        out_lines = stdout.decode("utf-8", "replace").splitlines()
+        err_lines = stderr.decode("utf-8", "replace").splitlines()
+        result = {
+            "success": proc.returncode == 0,
+            "exit_code": int(proc.returncode or 0),
+            "stdout": out_lines,
+            "stderr": err_lines,
+        }
+        if notify_peer:
+            try:
+                await self._send(
+                    make_command_output_packet(
+                        command_id=command_id,
+                        stdout=out_lines,
+                        stderr=err_lines,
+                        output=True,
+                    )
                 )
-            )
-            await self._send(
-                make_command_output_packet(
-                    command_id=command_id,
-                    success=proc.returncode == 0,
-                    exit_code=int(proc.returncode or 0),
-                    finished=True,
+                await self._send(
+                    make_command_output_packet(
+                        command_id=command_id,
+                        success=result["success"],
+                        exit_code=result["exit_code"],
+                        finished=True,
+                    )
                 )
-            )
-        except (HandshakeError, ProtocolError, TimeoutError, OSError):
-            _LOGGER.warning("Could not deliver command output to %s", self._device_id)
+            except (HandshakeError, ProtocolError, TimeoutError, OSError):
+                _LOGGER.warning("Could not deliver command output to %s", self._device_id)
+        self._fire_command_result(command_id, key, command, result)
+        return result
+
+    def _fire_command_result(
+        self, command_id: int, key: str, command: str, result: dict[str, Any]
+    ) -> None:
+        self._fire(
+            EVENT_COMMAND_OUTPUT,
+            {
+                "device_id": self._device_id,
+                "kind": "finished",
+                "id": str(command_id),
+                "key": key,
+                "command": command,
+                "stdout": result.get("stdout", []),
+                "stderr": result.get("stderr", []),
+                "success": result.get("success"),
+                "exit_code": result.get("exit_code"),
+            },
+        )
+
+    async def run_local_command(self, key: str) -> bool:
+        """Run one of this HA instance's configured commands locally."""
+        command = self._local_commands.get(key)
+        if command is None:
+            raise ProtocolError(f"unknown local command {key!r}")
+        self._command_counter = (self._command_counter + 1) % 2**31
+        command_id = self._command_counter
+        scheduler = getattr(self._hass, "async_create_task", None)
+        if scheduler is None:
+            await self._execute_local_command(command_id, key, command, notify_peer=False)
+            return True
+        task = scheduler(
+            self._execute_local_command(command_id, key, command, notify_peer=False)
+        )
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
+        return True
 
     # ------------------------------------------------------------------ mpris
 
